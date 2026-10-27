@@ -1,0 +1,3944 @@
+// Проигрыватель модели Базиса: один на все проекты. Данные — ./model.json рядом со страницей проекта.
+import * as THREE from 'three';
+
+const APP_DATE = '2026-09-29';
+const $ = id => document.getElementById(id);
+// телефон/планшет: палец вместо мыши — свои жесты, компактные кнопки, структура снизу
+const TOUCH = matchMedia('(pointer: coarse)').matches;
+if (TOUCH) document.documentElement.classList.add('touch');
+// страница не масштабируется и не уезжает — все касания забирает модель
+(() => {
+  let vp = document.querySelector('meta[name=viewport]');
+  if (!vp) { vp = document.createElement('meta'); vp.name = 'viewport'; document.head.appendChild(vp); }
+  vp.content = 'width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover';
+  for (const ev of ['gesturestart', 'gesturechange', 'gestureend']) document.addEventListener(ev, e => e.preventDefault(), { passive: false });
+  // «добавить на главный экран»: у каждого проекта свой manifest.json (пишет выгрузка), иконка общая
+  const add = (tag, attrs) => { const el = document.createElement(tag); for (const k in attrs) el.setAttribute(k, attrs[k]); document.head.appendChild(el); };
+  // один файл-страница (window.__MODEL — модель внутри файла): соседних файлов нет, значок и manifest не нужны
+  if (!window.__MODEL) {
+    if (!document.querySelector('link[rel=manifest]')) add('link', { rel: 'manifest', href: 'manifest.json' });
+    add('link', { rel: 'apple-touch-icon', href: '../_app/icon-192.png' });
+  }
+  add('meta', { name: 'apple-mobile-web-app-capable', content: 'yes' });
+  add('meta', { name: 'mobile-web-app-capable', content: 'yes' });
+  add('meta', { name: 'theme-color', content: '#2b2f36' });
+})();
+
+// ---------------- значки кнопок ----------------
+// Кнопки — значками вместо слов (замечание 27.09: «компактнее»). Подпись: на компьютере — при наведении,
+// на телефоне — подержать палец на кнопке. Виды — кубиком справа вверху (см. «кубик видов»).
+const sv = b => `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${b}</svg>`;
+const CT = '12,3 20,7.5 12,12 4,7.5', CF = '4,7.5 12,12 12,21 4,16.5', CR = '12,12 20,7.5 20,16.5 12,21';
+const ICON = {
+  // структура — как у веб-просмотра Базиса: точки со строками (замечание 29.09)
+  tree: sv('<circle cx="4.5" cy="7" r="1.4" fill="currentColor"/><circle cx="4.5" cy="12" r="1.4" fill="currentColor"/><circle cx="4.5" cy="17" r="1.4" fill="currentColor"/><path d="M9 7h11M9 12h11M9 17h11"/>'),
+  v3: sv(`<polygon points="${CT}" fill="currentColor" fill-opacity=".15"/><polygon points="${CF}" fill="currentColor" fill-opacity=".4"/><polygon points="${CR}" fill="currentColor" fill-opacity=".25"/>`),
+  persp: sv('<path d="M2 20L8 5h8l6 15z"/><path d="M12 5v15M5 13h14"/>'),
+  ortho: sv('<path d="M3 20V9h12v11zM3 9l5-5h12l-5 5M15 20l5-5V4"/>'),
+  fit: sv('<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/><rect x="9" y="9" width="6" height="6"/>'),
+  solid: sv('<rect x="4" y="4" width="16" height="16" rx="2" fill="currentColor" fill-opacity=".55"/>'),
+  ghost: sv('<rect x="3" y="3" width="12" height="12" rx="2" fill="currentColor" fill-opacity=".2"/><rect x="9" y="9" width="12" height="12" rx="2" fill="currentColor" fill-opacity=".2"/>'),
+  wire: sv(`<polygon points="${CT}"/><polygon points="${CF}"/><polygon points="${CR}"/><path d="M4 7.5l8 4.5M12 3v9" stroke-dasharray="2 2"/>`),
+  hw: sv('<circle cx="12" cy="12" r="7"/><path d="M9.5 9.5l5 5M14.5 9.5l-5 5"/>'),
+  prof: sv('<path d="M5 4h14v3h-5v10h5v3H5v-3h5V7H5z"/>'),
+  lines: sv('<path d="M3 18l6-6 4 4 8-9"/>'),
+  ruler: sv('<rect x="2" y="8" width="20" height="8" rx="1"/><path d="M6 8v3M10 8v4M14 8v3M18 8v4"/>'),
+  undo: sv('<path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/>'),
+  dims: sv('<path d="M4 12h16M4 7v10M20 7v10M8 9.5L5 12l3 2.5M16 9.5l3 2.5-3 2.5"/>'),
+  open: sv('<path d="M4 3h9v18H4zM13 3l6 3v15l-6-2"/>'),
+  close: sv('<rect x="5" y="3" width="14" height="18" rx="1"/><path d="M15 12h1"/>'),
+  fac: sv('<rect x="5" y="3" width="14" height="18" rx="1"/><path d="M15 12h1"/><path d="M3 21L21 3" stroke-width="2"/>'),
+  eye: sv('<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>'),
+  faces: sv('<path d="M5 4v16M19 4v16M8 12h8M10.5 9.5L8 12l2.5 2.5M13.5 9.5L16 12l-2.5 2.5"/>'),
+  edges: sv('<path d="M4 15L15 4M9 20L20 9"/><path d="M8.5 11.5l4 4" stroke-dasharray="1.5 1.5"/>'),
+  trash: sv('<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/>'),
+  gab: sv('<path d="M4 8l8-4 8 4v8l-8 4-8-4zM4 8l8 4 8-4M12 12v8"/>'),
+  easy: sv('<rect x="3" y="3" width="18" height="18" rx="1.5"/><path d="M7 12h10M7 12l2-2M7 12l2 2M17 12l-2-2M17 12l-2 2"/>'),
+  points: sv('<circle cx="5" cy="12" r="2.2" fill="currentColor"/><circle cx="19" cy="12" r="2.2" fill="currentColor"/><path d="M8 12h8" stroke-dasharray="2 2"/>'),
+  // до стін: угол комнаты (стена и пол) и полка с размерами до них
+  wall: sv('<path d="M4 3v18h17" stroke-width="2.2"/><path d="M11 9h8"/><path d="M15 9v9.5M13.5 16.5l1.5 2 1.5-2" stroke-dasharray="0"/><path d="M11 6.5H6.5M8 5l-1.5 1.5L8 8"/>'),
+  sheet: sv('<path d="M5 3h10l4 4v14H5z"/><path d="M15 3v4h4M8 17h8M8 17v-6M16 17v-6M8 11h8"/>'),
+};
+// кнопка строки → значок и подпись
+// Строка кнопок — короткая (решение 28–29.09): виды ушли в кубик, способы показа и камеры — окошком
+// рядом со своей кнопкой (как способы у рулетки), структура — язычком у левого края.
+// Надписи кнопок, подсказок к ним и окошек — українською (просьба Богдана, 29.09): страницу смотрят заказчики.
+const BTN_ICON = {
+  bShowAll: ['eye', 'показати все'],
+  bMode: ['solid', 'вигляд: суцільно / напівпрозоро / лінії'],
+  bCam: ['persp', 'камера: перспектива / без перспективи / вписати'],
+  bOC: ['open', 'відкрити все / закрити все'],
+  bFac: ['fac', 'сховати фасади / показати фасади'],
+  bRuler: ['ruler', 'рулетка'], bUndo: ['undo', 'скасувати точку (Esc, права кнопка)'],
+  bDims: ['dims', 'розміри: коротко — сховати/показати, довго — видалити всі'],
+  bDraw: ['sheet', 'креслення: кадри для звіту'],
+};
+// Фурнитура, профили, линии — служебное, заказчику не показываем. Видно, когда проигрыватель открыт
+// у Алексея на компьютере (местный адрес) или в режиме сборки (хвост ссылки #сборка).
+const SERVICE = /^(127\.0\.0\.1|localhost)$/.test(location.hostname) || decodeURIComponent(location.hash).includes('сборка');
+
+// ---------------- разметка ----------------
+document.body.insertAdjacentHTML('beforeend', `
+<div id="load">завантаження моделі…</div>
+<div id="tree" class="hidden">
+  <div class="head">
+    <div class="row top"><input type="search" id="q" placeholder="пошук за назвою"></div>
+    <div class="row">
+      <button id="tOnly" title="Сховати все, крім виділеного">тільки це</button>
+      <button id="tHide" title="Сховати виділене (Delete)">сховати</button>
+      <button id="tAll">показати все</button>
+      <button id="tFit" title="Наблизити до виділеного">до виділеного</button>
+    </div>
+  </div>
+  <div class="body" id="tbody"></div>
+</div>
+<div id="ttab" title="Структура: натиснути — відкрити/закрити, потягнути — ширина"></div>
+<div id="vcube"><svg id="vaxes" viewBox="-50 -50 100 100"></svg><div class="cb"></div></div>
+<div id="pop"></div>
+<div id="tools"></div><div id="toast"></div>
+<div id="card"></div>
+<div id="rlabel"></div><div id="snapmk"></div>
+<div id="stamp"></div>
+<canvas id="loupe" width="240" height="240"></canvas>
+<div id="hint"><b>Як дивитися</b>
+  <p>☝ один палець — обертати</p><p>✌ два пальці — наблизити й зсунути</p>
+  <p>👆 торкнутися дверцят або шухляди — відкрити / закрити</p><p>✋ потримати палець на деталі — що це за деталь</p>
+  <p>📏 рулетка: торкніться грані, потім паралельної їй — розмір між ними; потримайте палець — лупа</p>
+  <small>торкніться, щоб закрити</small></div>
+<div id="bar">
+  <button id="bShowAll" style="display:none">показати все</button>
+  <button id="bMode">вигляд</button><button id="bCam">камера</button><button id="bOC">відкрити все</button><button id="bFac" style="display:none">фасади</button>
+  <button id="bRuler">рулетка</button><button id="bUndo" style="display:none" title="Прибрати поставлену першу точку (Esc, права кнопка)">скасувати точку</button><button id="bDims" style="display:none" title="Коротко — сховати/показати, довго — видалити всі">розміри</button>
+  <button id="bDraw" style="display:none">креслення</button>
+  <span id="st"></span>
+</div>
+<div id="sheet"><span></span></div>
+<svg id="dsvg"></svg>
+<div id="dpanel"></div>
+<div id="drib"></div><div id="dstrip"></div><div id="dctx"></div><div id="dfly"></div><div id="dstat"></div><div id="dtip"></div>`);
+$('stamp').textContent = 'програвач від ' + APP_DATE;
+
+// ---------------- сцена ----------------
+const scene = new THREE.Scene();
+const root = new THREE.Group(); scene.add(root);
+scene.add(new THREE.AmbientLight(0xffffff, 1.9));
+const d1 = new THREE.DirectionalLight(0xffffff, 1.5); d1.position.set(1, 2, 1.2); scene.add(d1);
+const d2 = new THREE.DirectionalLight(0xffffff, 0.6); d2.position.set(-1, -0.6, -1); scene.add(d2);
+
+const rend = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+rend.setPixelRatio(Math.min(devicePixelRatio || 1, 2));   // выше двойки — только нагрев телефона
+rend.setSize(innerWidth, innerHeight);
+document.body.prepend(rend.domElement);
+
+const persp = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 1, 1e6);
+const ortho = new THREE.OrthographicCamera(-1, 1, 1, -1, -1e6, 1e6);
+let cam = persp;
+
+// перерисовка только когда что-то изменилось
+let dirty = true;
+const need = () => { dirty = true; };
+
+// ---------------- данные ----------------
+// Рёбра деталей: видимые — тёмные (контрастнее прежнего серого, замечание 29.09); в режиме «линии» ещё и
+// скрытые за деталями — светлые, как у Базиса: сразу видно, что спереди, а что сзади.
+const EDGE = new THREE.LineBasicMaterial({ color: 0x0c0e11, transparent: true, opacity: 0.92 });
+const EDGE_HID = new THREE.LineBasicMaterial({ color: 0x9aa4ae, transparent: true, opacity: 0.45, depthWrite: false, depthFunc: THREE.GreaterDepth });
+let M;                 // модель
+const parts = [];      // деталь/единица фурнитуры: {g, meshes, edges, h, n, mat, isF, hidden, i}
+const nodes = {};      // узел структуры: {id, name, kids[], parts[], parent, hidden, count}
+const rootKids = [], rootParts = [];
+const animNode = {};   // подвижный узел: id → {a, ang, d, c, t}
+const moving = [];     // детали, у которых есть подвижные предки
+const picks = [];
+const hidEdges = [];   // копии рёбер для режима «линии»: рисуются только там, где их закрывает деталь
+const markObjs = [];   // значки крепежа на пласти (выгрузка метит их материал mk): в 3D видны, в кресленні спрятаны
+let clipPl = null;     // разрез вида в кресленні: плоскость, всё по отрицательную сторону отсечено (см. «разрез вида»)
+const cutAway = p => !!clipPl && drawOn && clipPl.distanceToPoint(p) < -0.01;
+const box = new THREE.Box3();
+let rad = 1000, showF = true, showB = true, showL = true;
+let drawOn = false;    // вкладка «креслення» (см. ниже)
+const KIND = { p: 'панель', f: 'фурнітура', b: 'профіль', m: '3D-об’єкт', l: 'лінія' };
+const NTYPE = { TFurnBlock: 'блок', TFurnAsm: 'збірка', TDraftBlock: 'напівфабрикат', layer: 'шар' };
+
+function colorOf(c) { return (c[0] << 16) | (c[1] << 8) | c[2]; }
+
+// модель первой версии (цвет прямо в куске) — привести к общему виду
+function upgradeV1() {
+  if (M.v >= 2) return;
+  const mats = [], idx = {};
+  const mi = c => { const k = c.join(','); if (idx[k] === undefined) { idx[k] = mats.length; mats.push({ c, t: -1, sx: 1000, sy: 1000, a: 0, tr: 0 }); } return idx[k]; };
+  M.shapes = M.shapes.map(sh => sh.map(sd => ({ m: mi(sd.c), v: sd.v })));
+  for (const od of M.objs) { if (od.p) od.p = od.p.map(pd => ({ m: mi(pd.c), v: pd.v })); od.k = od.f !== undefined ? 'f' : 'p'; }
+  M.mats = mats; M.tex = []; M.anim = {};
+}
+
+// материалы: картинки грузятся один раз, у каждой детали своя копия материала (для подсветки выделения)
+const texCache = {};
+function texture(ti, mt) {
+  const name = M.tex[ti];
+  if (!texCache[name]) {
+    const tx = new THREE.TextureLoader().load((window.__TEX && window.__TEX[name]) || '../_tex/' + name, need);
+    tx.colorSpace = THREE.SRGBColorSpace; tx.wrapS = tx.wrapT = THREE.RepeatWrapping;
+    // uvs=1: выгрузка уже перевела координаты в доли картинки (с учётом шага и фурнитуры в долях)
+    if (!M.uvs) tx.repeat.set(1 / (mt.sx || 1000), 1 / (mt.sy || 1000));
+    // «угол» из карточки не применяем: у кромок он 90, а картинка у Базиса и так лежит вдоль (прогон 26.09)
+    texCache[name] = tx;
+  }
+  return texCache[name];
+}
+const matProto = [];
+function materialFor(mi) {
+  if (!matProto[mi]) {
+    const mt = M.mats[mi] || { c: [160, 160, 160], t: -1 };
+    const opt = { color: colorOf(mt.c), side: THREE.DoubleSide };
+    if (mt.t >= 0) opt.map = texture(mt.t, mt);
+    if (mt.tr > 0 && mt.tr < 1) { opt.transparent = true; opt.opacity = Math.max(0.15, 1 - mt.tr); opt.depthWrite = false; }
+    matProto[mi] = new THREE.MeshLambertMaterial(opt);
+  }
+  const m = matProto[mi].clone(); m.userData.base = matProto[mi];
+  return m;
+}
+function geom(pd) {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pd.v, 3));
+  if (pd.u) g.setAttribute('uv', new THREE.Float32BufferAttribute(pd.u, 2));
+  g.computeVertexNormals();
+  return g;
+}
+
+// рёбра детали как у EdgesGeometry, но без «сгиба на 180°»: Базис у деталей с вырезами/отверстиями отдаёт часть
+// длинных узких треугольников ровной пласти перевёрнутыми (узкий лежит поверх соседа) — нормали противоположны, а
+// оба в одной плоскости. EdgesGeometry считала это сгибом на 180° и проводила косую черту (скрины 08.10: планка
+// WingLine 051_3, бок шкафа под стиралку 051_4). У объёмной детали противоположные нормали соседей ребром не бывают.
+// Волосок (плиты, slivers): треугольник шириной меньше 0,5 мм и в 20 раз длиннее своей ширины. Выгрузка округляет точки
+// до 0,1 мм, и направление у волоска выходит случайным — на ровной пласти рисовалась косая черта (08.10: бок антресоли
+// левой 050_3, 275 мм). Волосок берёт направление широкого соседа по своей длинной стороне. Сверено на 050_3, 050_8,
+// 051_1, 051_3, 051_4: уходят только эти три черты. У фурнитуры и 3D-объектов не применяется — там меняло настоящие рёбра.
+function partEdges(g, deg, slivers) {
+  const pos = g.attributes.position.array, cosT = Math.cos(deg * Math.PI / 180);
+  const key = i => Math.round(pos[i] * 1e4) + ',' + Math.round(pos[i + 1] * 1e4) + ',' + Math.round(pos[i + 2] * 1e4);
+  const E = new Map(), out = [], thin = [];
+  const v = i => [pos[i], pos[i + 1], pos[i + 2]];
+  const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+  const crs = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  for (let t = 0; t < pos.length; t += 9) {
+    const P = [t, t + 3, t + 6], n = crs(sub(v(P[1]), v(P[0])), sub(v(P[2]), v(P[0]))), l = Math.hypot(n[0], n[1], n[2]);
+    if (l < 1e-9) continue;
+    n[0] /= l; n[1] /= l; n[2] /= l;
+    const K = P.map(key), len = [0, 1, 2].map(a => Math.hypot(...sub(v(P[(a + 1) % 3]), v(P[a])))), mx = Math.max(...len), hgt = l / mx;
+    const tri = { n, thin: !!slivers && hgt < 0.5 && mx > 20 * hgt, long: null };   // у всех сторон треугольника — один tri
+    for (let a = 0; a < 3; a++) {
+      const b = (a + 1) % 3, c = (a + 2) % 3;
+      if (K[a] === K[b]) continue;
+      const h = K[a] < K[b] ? K[a] + '|' + K[b] : K[b] + '|' + K[a];
+      const r = E.get(h), f = { tri, a: P[a], b: P[b], c: P[c] };
+      if (r) r.push(f); else E.set(h, [f]);
+      if (len[a] === mx) tri.long = h;
+    }
+    if (tri.thin) thin.push(tri);
+  }
+  for (const tri of thin) {
+    const nb = tri.long && E.get(tri.long).find(f => !f.tri.thin);
+    if (nb) tri.n = nb.tri.n;
+  }
+  for (const fs of E.values()) {
+    const f = fs[0];
+    let draw = fs.length !== 2;
+    if (fs.length === 2) {
+      const d = dot(f.tri.n, fs[1].tri.n);
+      draw = d <= cosT && d >= -cosT;   // d < -cosT: перевёрнутый сосед в той же плоскости — не ребро
+    }
+    if (draw) out.push(pos[f.a], pos[f.a + 1], pos[f.a + 2], pos[f.b], pos[f.b + 1], pos[f.b + 2]);
+  }
+  const eg = new THREE.BufferGeometry();
+  eg.setAttribute('position', new THREE.Float32BufferAttribute(out, 3));
+  return eg;
+}
+
+// чем меньше форма фурнитуры, тем выше она в споре за общую плоскость (0…3)
+const rankMemo = {};
+function shapeRank(f) {
+  if (rankMemo[f] !== undefined) return rankMemo[f];
+  const b = new THREE.Box3();
+  for (const sd of M.shapes[f]) for (let i = 0; i < sd.v.length; i += 3) b.expandByPoint(new THREE.Vector3(sd.v[i], sd.v[i + 1], sd.v[i + 2]));
+  const dg = b.isEmpty() ? 1000 : b.getSize(new THREE.Vector3()).length();
+  return (rankMemo[f] = Math.max(0, Math.min(3, Math.floor(400 / Math.max(dg, 1)))));
+}
+function build() {
+  upgradeV1();
+  const SG = M.shapes.map(sh => sh.map(sd => ({ g: geom(sd), m: sd.m })));
+  for (const id in M.anim) {
+    const s = M.anim[id];
+    animNode[id] = { a: new THREE.Vector3(s[0], s[1], s[2]), ang: s[3], d: s[4], c: new THREE.Vector3(s[5], s[6], s[7]), t: 0 };
+  }
+  M.objs.forEach((od, i) => {
+    const grp = new THREE.Group(), meshes = [], edges = [];
+    if (od.k === 'l') {
+      const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(od.l, 3));
+      grp.add(new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: colorOf(od.c || [90, 98, 107]) })));
+    } else if (od.f !== undefined) {
+      const inst = new THREE.Group(); inst.matrixAutoUpdate = false;
+      const t = od.t;
+      inst.matrix.set(t[0], t[1], t[2], t[3], t[4], t[5], t[6], t[7], t[8], t[9], t[10], t[11], 0, 0, 0, 1);
+      for (const s of SG[od.f]) {
+        const mt = materialFor(s.m);
+        // грани фурнитуры, лежащие в одной плоскости с плитой или соседней фурнитурой (врезной подвес LIBRA в крышке и
+        // на планке), рисовались полосами вперемешку — фурнитура всегда поверх, из двух фурнитур — меньшая.
+        // Только постоянный сдвиг: наклонная часть (factor) на взгляде вскользь вырастала больше толщины плиты —
+        // направляющие за 18 мм ДСП просвечивали пунктиром (скрин 06.10)
+        mt.polygonOffset = true; mt.polygonOffsetFactor = 0; mt.polygonOffsetUnits = -1 - shapeRank(od.f);
+        const m = new THREE.Mesh(s.g, mt); m.userData.idx = i; inst.add(m); meshes.push(m); picks.push(m);
+      }
+      grp.add(inst);
+    } else {
+      for (const pd of od.p) {
+        const g = geom(pd); g.computeBoundingBox(); box.union(g.boundingBox);
+        const m = new THREE.Mesh(g, materialFor(pd.m)); m.userData.idx = i; grp.add(m); meshes.push(m); picks.push(m);
+        const ln = new THREE.LineSegments(partEdges(g, 25, od.k === 'p'), EDGE); grp.add(ln); edges.push(ln);
+        const lh = new THREE.LineSegments(ln.geometry, EDGE_HID); lh.visible = false; lh.renderOrder = 1; grp.add(lh); hidEdges.push(lh);
+        if (M.mats[pd.m] && M.mats[pd.m].mk) { m.userData.mark = ln.userData.mark = lh.userData.mark = true; markObjs.push(m, ln); }
+      }
+    }
+    root.add(grp);
+    const h = od.h || [];
+    // подвижные предки — от внешнего к внутреннему (h идёт от ближайшего владельца вверх)
+    const chainA = h.filter(id => animNode[id]).reverse();
+    const rec = { g: grp, meshes, edges, h, v: h, d: od.d || '', n: od.n, kind: od.k || 'p', isF: od.k === 'f' || od.k === 'm', isB: od.k === 'b', isL: od.k === 'l', hidden: false, i, chainA };
+    parts.push(rec);
+    if (chainA.length) { grp.matrixAutoUpdate = false; moving.push(rec); }
+  });
+  poseAll();
+  initLevels();
+
+  // уровни для показа (дерево, цепочка карточки, Tab) без пустых обёрток (Алексей 29.09): блок в блоке с тем же
+  // содержимым — остаётся верхний; блок с одним объектом — остаётся сама деталь. Сборочная единица не убирается.
+  // REP: убранный узел → оставленный с тем же содержимым (-1 — сама деталь). h (полная цепочка) — для движения.
+  const ASM = new Set(M.nasm || []);
+  parts.forEach(p => {
+    const v = []; let upN = -1, upId = -1;
+    for (let k = p.h.length - 1; k >= 0; k--) {
+      const id = p.h[k], n = NCNT[id] || 0;
+      if (n === upN) { REP[id] = upId; continue; }
+      if (n <= 1 && !ASM.has(id)) { REP[id] = -1; continue; }
+      REP[id] = id; v.unshift(id); upN = n; upId = id;
+    }
+    p.v = v;
+  });
+
+  // структура: цепочка идёт от ближайшего владельца к верхнему
+  parts.forEach((p, i) => {
+    let parent = null;
+    for (let k = p.v.length - 1; k >= 0; k--) {
+      const id = p.v[k];
+      let nd = nodes[id];
+      if (!nd) {
+        nd = nodes[id] = { id, name: M.names[id] || '(без назви)', kids: [], parts: [], parent: parent ? parent.id : -1,
+                           hidden: false, count: 0, open: false };
+        (parent ? parent.kids : rootKids).push(id);
+      }
+      nd.count++;
+      parent = nd;
+    }
+    (parent ? parent.parts : rootParts).push(i);
+  });
+
+  const ctr = box.getCenter(new THREE.Vector3()), size = box.getSize(new THREE.Vector3());
+  root.position.set(-ctr.x, -ctr.y, -ctr.z);
+  rad = Math.max(size.x, size.y, size.z) || 1000;
+  view.dist = rad * 1.8;
+  document.title = M.title || 'Перегляд виробу';
+}
+
+// ---------------- движение: у каждого звена своя дуга, звено внутри звена складывается ----------------
+// Замер diag_14: «всё открыто» = внешнее ∘ … ∘ внутреннее, каждое снято при закрытых остальных, 0 мм.
+const ONE = new THREE.Vector3(1, 1, 1);
+function screwMatrix(n) {
+  const q = new THREE.Quaternion().setFromAxisAngle(n.a, n.ang * n.t);
+  const p = n.c.clone().sub(n.c.clone().applyQuaternion(q)).addScaledVector(n.a, n.d * n.t);
+  return new THREE.Matrix4().compose(p, q, ONE);
+}
+function poseAll() {
+  for (const pr of moving) {
+    const m = new THREE.Matrix4();
+    for (const id of pr.chainA) m.multiply(screwMatrix(animNode[id]));   // внешнее слева, внутреннее справа
+    pr.g.matrix.copy(m);
+  }
+}
+const anims = [];   // {ids, from[], to, st}
+function startAnim(ids, to) {
+  if (!ids.length) return;
+  // новое движение забирает эти узлы у прежних (иначе два движения тянут ящик в разные стороны)
+  const S = new Set(ids);
+  for (let k = anims.length - 1; k >= 0; k--) {
+    const a = anims[k], keep = a.ids.map((id, j) => S.has(id) ? -1 : j).filter(j => j >= 0);
+    if (keep.length === a.ids.length) continue;
+    if (!keep.length) { anims.splice(k, 1); continue; }
+    a.ids = keep.map(j => a.ids[j]); a.from = keep.map(j => a.from[j]);
+  }
+  anims.push({ ids, from: ids.map(id => animNode[id].t), to, st: performance.now() });
+  need();
+}
+function tick() {
+  if (!anims.length) return;
+  for (let i = anims.length - 1; i >= 0; i--) {
+    const a = anims[i];
+    const k = Math.min(1, (performance.now() - a.st) / 900);
+    const e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
+    a.ids.forEach((id, j) => { animNode[id].t = a.from[j] + (a.to - a.from[j]) * e; });
+    if (k >= 1) { anims.splice(i, 1); if (!anims.length) syncOC(); }
+  }
+  poseAll(); need();
+}
+// щелчок по детали: внешнее подвижное звено и всё, что внутри него, — как в Базисе
+// Если подвижное звено сидит в небольшой «системе» (ящик + его направляющие), открывается вся система:
+// направляющая у Базиса лежит рядом с ящиком, а не внутри него. Система = владелец звена, если в нём
+// деталей не больше чем в 2,5 раза больше, чем в самом звене (иначе это модуль — открываем только звено).
+function toggleAt(i, to) {
+  const ch = parts[i].chainA;
+  if (!ch.length) return false;
+  const top = ch[0], ids = scopeIds(i);
+  const dir = to !== undefined ? to : (openTarget(top) ? 0 : 1);
+  lastOpenDelay = 0;
+  if (dir === 1) {
+    // открываемое заденет уже открытое (две двери на одной стойке)? — сначала закрыть мешающее, потом открыть (29.09)
+    const blk = blockersOf(ids);
+    if (blk.length) {
+      startAnim(blk, 0);
+      const list = [...ids];
+      for (const id of list) pendingOpen.add(id);
+      setTimeout(() => { for (const id of list) pendingOpen.delete(id); startAnim(list, 1); }, 900);
+      lastOpenDelay = 900;
+      return true;
+    }
+  }
+  startAnim([...ids], dir);
+  return true;
+}
+// всё, что движется вместе с деталью i по щелчку (фасад + его петли, ящик + направляющие) — одно правило
+// и для щелчка, и для закрытия мешающей двери (иначе петли оставались открытыми, 29.09)
+function scopeIds(i) {
+  const ch = parts[i].chainA;
+  const top = ch[0], ids = new Set(), h = parts[i].h;
+  const pIdx = h.indexOf(top) + 1, P = pIdx < h.length ? h[pIdx] : null;
+  let scope = top;
+  if (P !== null && (!M.ntype || M.ntype[P] !== 'layer') && partsUnder(P).length <= 2.5 * partsUnder(top).length) scope = P;
+  // как в Базисе: самый внешний блок с анимацией (даже нулевой) запускает всё движение внутри себя (фасад + петли)
+  if (M.grp && M.grp.length) {
+    const G = new Set(M.grp);
+    for (let k = h.length - 1; k >= 0; k--) if (G.has(h[k]) || animNode[h[k]]) { if (G.has(h[k])) scope = h[k]; break; }
+  }
+  for (const pr of moving) {
+    if (!pr.h.includes(scope)) continue;
+    const k = scope === top ? pr.chainA.indexOf(top) : 0;
+    for (let q = Math.max(0, k); q < pr.chainA.length; q++) ids.add(pr.chainA[q]);
+  }
+  return ids;
+}
+let lastOpenDelay = 0;
+const pendingOpen = new Set();
+// положение детали при заданных долях открывания её звеньев (tOf(id) → 0…1)
+function poseOf(pr, tOf) {
+  const m = new THREE.Matrix4();
+  for (const id of pr.chainA) m.multiply(screwMatrix(Object.assign({}, animNode[id], { t: tOf(id) })));
+  return m;
+}
+function panelBox(pr, m) {
+  const b = new THREE.Box3();
+  for (const me of pr.meshes) { const g = me.geometry; if (!g.boundingBox) g.computeBoundingBox(); b.union(g.boundingBox.clone().applyMatrix4(m)); }
+  return b;
+}
+// какие открытые звенья окажутся на пути открываемых ids: путь проходим шагом 1/12, детали — панели
+function blockersOf(ids) {
+  const S = new Set(ids), mine = [], others = new Map();
+  for (const pr of moving) {
+    if (pr.kind !== 'p') continue;
+    if (pr.chainA.some(id => S.has(id))) { mine.push(pr); continue; }
+    const t0 = pr.chainA[0];
+    // открытое или ещё не доехавшее до закрытия (лёгкие размеры закрывают прежнюю дверь в тот же миг)
+    if (openTarget(t0) || animNode[t0].t > 0.05) { if (!others.has(t0)) others.set(t0, []); others.get(t0).push(panelBox(pr, pr.g.matrix).expandByScalar(-1)); }
+  }
+  if (!others.size || !mine.length) return [];
+  const hit = new Set();
+  for (let s = 1; s <= 12; s++) {
+    const f = s / 12;
+    for (const pr of mine) {
+      const b = panelBox(pr, poseOf(pr, id => S.has(id) ? f : animNode[id].t));
+      for (const [t0, boxes] of others) if (!hit.has(t0) && boxes.some(q => q.intersectsBox(b))) hit.add(t0);
+    }
+  }
+  // закрываем мешающее звено целиком, со всем, что внутри его системы
+  const out = new Set();
+  for (const t0 of hit) { const pr = moving.find(q => q.chainA[0] === t0); if (pr) for (const id of scopeIds(pr.i)) out.add(id); }
+  return [...out];
+}
+// открыт ли узел — по тому, КУДА он сейчас едет, а не по тому, где он в эту долю секунды
+// (щелчок посреди выезда считал ящик закрытым: соседний не закрывался, размеры ложились на закрытый, 29.09)
+function openTarget(id) {
+  if (pendingOpen.has(id)) return true;
+  for (let k = anims.length - 1; k >= 0; k--) { const a = anims[k], j = a.ids.indexOf(id); if (j >= 0) return a.to === 1; }
+  return animNode[id].t > 0.5;
+}
+const allAnimIds = () => Object.keys(animNode);
+
+// ---------------- камера ----------------
+const view = { yaw: 0.7, pitch: 0.28, dist: 1000, target: new THREE.Vector3(), persp: true };
+function viewHeight() { return 2 * view.dist * Math.tan(THREE.MathUtils.degToRad(persp.fov / 2)); }
+function place() {
+  const { yaw, pitch, dist, target } = view;
+  const pos = new THREE.Vector3(Math.cos(pitch) * Math.sin(yaw), Math.sin(pitch), Math.cos(pitch) * Math.cos(yaw))
+    .multiplyScalar(dist).add(target);
+  const f = target.clone().sub(pos).normalize();
+  const right = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw));
+  const up = new THREE.Vector3().crossVectors(right, f).normalize();   // верно и при взгляде строго сверху
+  cam = view.persp ? persp : ortho;
+  cam.position.copy(pos); cam.up.copy(up); cam.lookAt(target);
+  const asp = innerWidth / innerHeight;
+  // центр вида — середина свободного места (без панели структуры и нижней строки кнопок)
+  const fr = freeRect(), ox = -(fr.x0 + fr.x1 - innerWidth) / 2, oy = -(fr.y0 + fr.y1 - innerHeight) / 2;
+  persp.aspect = asp; persp.near = Math.max(1, dist / 1000); persp.far = dist + rad * 60;
+  persp.setViewOffset(innerWidth, innerHeight, ox, oy, innerWidth, innerHeight);
+  const h = viewHeight();
+  ortho.left = -h * asp / 2; ortho.right = h * asp / 2; ortho.top = h / 2; ortho.bottom = -h / 2;
+  ortho.near = -rad * 60; ortho.far = rad * 60;
+  ortho.setViewOffset(innerWidth, innerHeight, ox, oy, innerWidth, innerHeight);
+  updCube(right, up, f.clone().negate());
+  updRuler(); if (drawOn) drawInfo(); need();
+}
+
+// ---------------- кубик видов ----------------
+// Справа вверху, как у веб-просмотра Базиса: поворачивается вместе с моделью, подписи по-английски,
+// из угла — оси X красная, Y зелёная, Z синяя. Нажал на грань — строгий вид с этой стороны;
+// потянул кубик — модель вращается. Грань и её вид: FRONT — спереди (+Z), RIGHT — справа (+X), TOP — сверху (+Y).
+const CUBE_FACES = [
+  ['FRONT', 'rotateY(0deg)', 0, 0], ['BACK', 'rotateY(180deg)', Math.PI, 0],
+  ['RIGHT', 'rotateY(90deg)', Math.PI / 2, 0], ['LEFT', 'rotateY(-90deg)', -Math.PI / 2, 0],
+  ['TOP', 'rotateX(90deg)', 0, Math.PI / 2], ['BOTTOM', 'rotateX(-90deg)', 0, -Math.PI / 2],
+];
+let cubeMoved = false;
+function initCube() {
+  const cb = document.querySelector('#vcube .cb');
+  for (const [name, rot, yaw, pitch] of CUBE_FACES) {
+    const f = document.createElement('div'); f.className = 'cf'; f.textContent = name;
+    f.style.transform = rot + ' translateZ(var(--ch))';
+    f.onclick = e => { e.stopPropagation(); if (cubeMoved) return; strictView(yaw, pitch); };
+    cb.appendChild(f);
+  }
+  // потянуть кубик — вращать модель (и выйти из строгого вида)
+  const w = $('vcube'); let st = null;
+  // палец/мышь захватываем только когда кубик потянули: захват сразу при нажатии забирал щелчок у грани
+  w.addEventListener('pointerdown', e => { e.stopPropagation(); st = { x: e.clientX, y: e.clientY }; cubeMoved = false; });
+  w.addEventListener('pointermove', e => {
+    if (!st) return;
+    const dx = e.clientX - st.x, dy = e.clientY - st.y;
+    if (!cubeMoved && Math.hypot(dx, dy) < 5) return;
+    if (drawOn && drawLines) return;                       // креслення: только строгие виды, кубик не вращает
+    if (!cubeMoved) try { w.setPointerCapture(e.pointerId); } catch (er) {}
+    cubeMoved = true; st = { x: e.clientX, y: e.clientY };
+    if (view.strict) view.strict = false;
+    orbit(dx * 1.6, dy * 1.6); place();
+  });
+  const end = () => { st = null; };
+  w.addEventListener('pointerup', end); w.addEventListener('pointercancel', end);
+  w.addEventListener('pointerleave', e => { if (!cubeMoved) st = null; });
+}
+// r, u, b — направления «вправо», «вверх» и «на смотрящего» в осях модели
+function updCube(r, u, b) {
+  const cb = document.querySelector('#vcube .cb'); if (!cb) return;
+  // грани кубика заданы в осях страницы (вниз — плюс), модель — вверх плюс: y переворачиваем
+  const m = [r.x, -u.x, b.x, 0, -r.y, u.y, -b.y, 0, r.z, -u.z, b.z, 0, 0, 0, 0, 1];
+  cb.style.transform = 'matrix3d(' + m.map(v => Math.abs(v) < 1e-9 ? 0 : v.toFixed(6)).join(',') + ')';
+  // оси из переднего нижнего левого угла кубика
+  const H = 22, L = 36, P = v => [v.dot(r), -v.dot(u)];
+  const o = new THREE.Vector3(-H, -H, H), [ox, oy] = P(o);
+  const ax = [['X', new THREE.Vector3(1, 0, 0), '#e0301e'], ['Y', new THREE.Vector3(0, 1, 0), '#2e9a3a'], ['Z', new THREE.Vector3(0, 0, 1), '#2b6cb0']];
+  let s = '';
+  for (const [n, d, c] of ax) {
+    const [x, y] = P(o.clone().addScaledVector(d, L));
+    s += `<line x1="${ox.toFixed(1)}" y1="${oy.toFixed(1)}" x2="${x.toFixed(1)}" y2="${y.toFixed(1)}" stroke="${c}" stroke-width="2.4" stroke-linecap="round"/>` +
+         `<text x="${(ox + (x - ox) * 1.18).toFixed(1)}" y="${(oy + (y - oy) * 1.18 + 3.5).toFixed(1)}" fill="${c}" font-size="10" font-weight="700" text-anchor="middle">${n}</text>`;
+  }
+  $('vaxes').innerHTML = s;
+}
+function freeRect() {
+  const t = $('tree');
+  const open = t && !t.classList.contains('hidden');
+  // значки наверху лежат поверх модели маленькой строкой — модель под них не сдвигаем
+  // структура слева; на телефоне она прозрачная и модель под ней не двигаем (иначе модель уезжает за край)
+  const x0 = open && !TOUCH ? t.offsetWidth : 0;
+  // креслення: сверху лента и строка значков, справа панель листов, снизу строка-подсказка — лист посередине
+  if (drawOn) return { x0, x1: innerWidth - $('dpanel').offsetWidth - 12, y0: ribBottom() + 8 + $('dstrip').offsetHeight + 8, y1: barTop() - 10 };
+  return { x0, x1: innerWidth, y0: 0, y1: innerHeight };
+}
+// «нажата» — только пометка on; остальные пометки кнопки (например «прятать в ⋯») не трогаем
+const setOn = (id, v) => $(id).classList.toggle('on', !!v);
+function setPersp(on) { view.persp = on; setIcon('bCam', on ? 'persp' : 'ortho'); place(); }
+// строгий вид (грань кубика): на телефоне не поворачивается — один палец двигает, два приближают;
+// обратно к вращению — потянуть кубик или «камера» → перспектива / без перспективы
+function strictView(yaw, pitch) { view.strict = true; view.yaw = yaw; view.pitch = pitch; setPersp(false); if (drawOn) fitSheet(); else fitVisible(); }
+
+// точка под курсором на плоскости цели (для масштаба к курсору и сдвига)
+function onTargetPlane(cx, cy) {
+  const ndc = new THREE.Vector2((cx / innerWidth) * 2 - 1, -(cy / innerHeight) * 2 + 1);
+  const rc = new THREE.Raycaster(); rc.setFromCamera(ndc, cam);
+  const n = cam.getWorldDirection(new THREE.Vector3());
+  const pl = new THREE.Plane().setFromNormalAndCoplanarPoint(n, view.target);
+  return rc.ray.intersectPlane(pl, new THREE.Vector3());
+}
+
+function visibleBox(onlySel) {
+  const b = new THREE.Box3();
+  root.updateMatrixWorld(true);
+  const list = onlySel ? selSet : parts.map((p, i) => i);
+  for (const i of list) {
+    const p = parts[i];
+    if (!onlySel && !p.g.visible) continue;
+    b.expandByObject(p.g);
+  }
+  return b;
+}
+function fitBox(b) {
+  if (b.isEmpty()) return;
+  const c = b.getCenter(new THREE.Vector3()), s = b.getSize(new THREE.Vector3());
+  view.target.copy(c);
+  // по экранной проекции рамки: сколько места она занимает по ширине и высоте окна
+  const r = Math.max(s.x, s.y, s.z, 100) * 0.5;
+  const pts = [];
+  for (const x of [b.min.x, b.max.x]) for (const y of [b.min.y, b.max.y]) for (const z of [b.min.z, b.max.z]) pts.push(new THREE.Vector3(x, y, z));
+  const f = new THREE.Vector3(Math.cos(view.pitch) * Math.sin(view.yaw), Math.sin(view.pitch), Math.cos(view.pitch) * Math.cos(view.yaw));
+  const right = new THREE.Vector3(Math.cos(view.yaw), 0, -Math.sin(view.yaw));
+  const up = new THREE.Vector3().crossVectors(right, f.clone().negate()).normalize();
+  let w = 0, h = 0;
+  for (const p of pts) { const d = p.clone().sub(c); w = Math.max(w, Math.abs(d.dot(right))); h = Math.max(h, Math.abs(d.dot(up))); }
+  const fr = freeRect(), fw = fr.x1 - fr.x0, fh = fr.y1 - fr.y0;
+  const hView = Math.max(h, w * fh / fw) * 2 * 1.08 * innerHeight / fh;   // с полями 8 % в свободном месте
+  view.dist = hView / (2 * Math.tan(THREE.MathUtils.degToRad(persp.fov / 2))) + (view.persp ? r : 0);
+  place();
+}
+function fitVisible() { fitBox(visibleBox(false)); }
+
+// ---------------- видимость ----------------
+// «сховати фасади»: всё, что внутри блока с дверной меткой салона (выгрузка пишет их в M.door), — целиком,
+// с петлями, линиями и демпферами внутри; фальш-панели и внутренние ящики меток не имеют (Алексей 29.09)
+let hideFac = false;
+function effVisible(p) {
+  if (p.hidden) return false;
+  if (hideFac && p.isDoor) return false;
+  if (p.isF && !showF) return false;
+  if (p.isB && !showB) return false;
+  if (p.isL && !showL) return false;
+  for (const id of p.v) if (nodes[id].hidden) return false;
+  return true;
+}
+function applyVis() {
+  let any = false;
+  for (const p of parts) { p.g.visible = effVisible(p); if (p.hidden) any = true; }
+  for (const k in nodes) if (nodes[k].hidden) any = true;
+  const b = $('bShowAll'); if (b) b.style.display = any ? '' : 'none';   // «показать всё» — только когда что-то скрыто
+  syncTools(); need();
+}
+function showAll() {
+  pushUndo();                                               // в кресленні — для Ctrl+Z
+  for (const p of parts) p.hidden = false;
+  for (const k in nodes) nodes[k].hidden = false;
+  applyVis(); renderTree();
+}
+function hideSel() {
+  pushUndo();
+  if (selMany.length || selOne.length) { for (const id of selMany) nodes[id].hidden = true; for (const i of selOne) parts[i].hidden = true; }
+  else if (selNode !== null) nodes[selNode].hidden = true;
+  else for (const i of selSet) parts[i].hidden = true;
+  clearSel(); applyVis(); renderTree();
+}
+function isolateSel() {
+  if (!selSet.length) return;
+  pushUndo();
+  const keep = new Set(selSet);
+  for (const k in nodes) nodes[k].hidden = false;
+  parts.forEach((p, i) => { p.hidden = !keep.has(i); });
+  applyVis(); renderTree();
+}
+
+// ---------------- выделение ----------------
+let selIdx = -1, selLevel = -1, selSet = [], selNode = null, selMany = [], selOne = [];   // набор: шкафы (Shift) + отдельные детали (Ctrl)
+const NCNT = {}, REP = {};
+function initLevels() { for (const p of parts) for (const id of p.h) NCNT[id] = (NCNT[id] || 0) + 1; }
+// уровни — по показанной цепочке v (без пустых обёрток), в ней объём растёт с каждым звеном
+function sizeAt(i, k) { return k < 0 ? 1 : (NCNT[parts[i].v[k]] || 1); }
+function upLevel(i, from) {
+  const v = parts[i].v, cur = sizeAt(i, from);
+  for (let k = from + 1; k < v.length; k++) if ((NCNT[v[k]] || 0) > cur) return k;
+  return v.length ? v.length - 1 : -1;
+}
+function downLevel(i, from) {
+  if (from < 0) return -1;
+  const cur = sizeAt(i, from);
+  for (let k = from - 1; k >= 0; k--) if ((NCNT[parts[i].v[k]] || 0) < cur) return k;
+  return -1;
+}
+function partsUnder(id) { const out = []; parts.forEach((p, i) => { if (p.h.includes(id)) out.push(i); }); return out; }
+// деталь, от которой построена цепочка в карточке: щелчки по звеньям цепочки её не меняют
+let chainPart = -1;
+function selectPart(i, level) {
+  selIdx = i; selLevel = level; chainPart = i; selMany = []; selOne = [];
+  const v = parts[i].v;
+  if (level < 0 || !v.length) { selNode = null; selSet = [i]; selLevel = -1; }
+  else { selNode = v[Math.min(level, v.length - 1)]; selSet = partsUnder(selNode); }
+  paint(); revealInTree();
+}
+function selectNode(id) { selNode = id; selIdx = -1; chainPart = -1; selMany = []; selOne = []; selSet = partsUnder(id); paint(); renderTree(); }
+// звено цепочки карточки: узел (блок, ящик, модуль…) или сама деталь
+function selectChain(id) {
+  const i = chainPart;
+  if (id === null) { selectPart(i, -1); return; }
+  const k = parts[i].v.indexOf(id);
+  selIdx = i; selLevel = k; selNode = id; selMany = []; selOne = []; selSet = partsUnder(id);
+  paint(); revealInTree();
+}
+function clearSel() { selIdx = -1; selSet = []; selNode = null; chainPart = -1; selMany = []; selOne = []; addMode = false; paint(); renderTree(); }
+// Телефон: кнопка «＋ додати» в карточке — пока включена, касание работает как Shift на компьютере (Алексей 01.10).
+// Снятое выделение выключает её.
+let addMode = false;
+function tapPick(i) { if (addMode) shiftPick(i); else stepSel(i); }
+// Лестница сборочных единиц (Алексей 01.10): от детали вверх только по галочкам «сборочная единица» из Базиса —
+// самая нижняя, потом та, в которую она входит, и так до верха. Нет галочек (выгрузки до 29.09 вечера) — подъёма нет.
+function asmChain(i) {
+  const out = [];
+  if (!M.nasm) return out;
+  const A = new Set(M.nasm), h = parts[i].h;
+  for (let k = 0; k < h.length; k++) {
+    if (!A.has(h[k])) continue;
+    const r = REP[h[k]];
+    if (r !== undefined && r >= 0 && !out.includes(r)) out.push(r);
+  }
+  return out;
+}
+// ступень выше: первая единица над деталью i, которая больше нынешнего выделения (cur — узел или null = сама деталь)
+function asmAbove(i, cur) {
+  const n0 = cur === null ? 1 : (NCNT[cur] || 0);
+  for (const c of asmChain(i)) if (c !== cur && (NCNT[c] || 0) > n0) return c;
+  return -1;
+}
+function rebuildMany() {
+  selIdx = -1; selNode = null; chainPart = -1; selLevel = -1;
+  const all = new Set(selOne); for (const n of selMany) for (const j of partsUnder(n)) all.add(j);
+  selSet = [...all];
+  if (!selSet.length) addMode = false;
+  paint(); renderTree();
+}
+function seedMany() {                                       // уже выделенное обычным щелчком — первым в набор
+  if (selMany.length || selOne.length) return;
+  if (selNode !== null) selMany.push(selNode); else if (selIdx >= 0) selOne.push(selIdx);
+}
+// Набор (компьютер, показ через проектор): Ctrl+щелчок — добавить/убрать одну деталь; Delete прячет все.
+function toggleOne(i) {
+  const fresh = !selMany.length && !selOne.length;
+  seedMany();
+  if (fresh && selOne.length === 1 && selOne[0] === i) { rebuildMany(); return; }   // Ctrl по уже выделенной — остаётся
+  const at = selOne.indexOf(i);
+  if (at >= 0) selOne.splice(at, 1); else selOne.push(i);
+  rebuildMany();
+}
+// Shift+щелчок: по невыделенной детали — добавить её самую нижнюю сборочную единицу; по выделенной — поднять ту
+// единицу на ступень выше (выделенное внутри неё вливается); выше некуда — снять её из набора (Алексей 01.10).
+function shiftPick(i) {
+  seedMany();
+  const own = selMany.find(n => partsUnder(n).includes(i));
+  const cur = own !== undefined ? own : (selOne.includes(i) ? null : undefined);
+  if (cur === undefined) {                                  // ещё не выделена
+    const c = asmAbove(i, null);
+    if (c < 0) selOne.push(i); else addUnit(c);
+  } else {
+    const c = asmAbove(i, cur);
+    if (cur === null) selOne.splice(selOne.indexOf(i), 1); else selMany.splice(selMany.indexOf(cur), 1);
+    if (c >= 0) addUnit(c);
+  }
+  rebuildMany();
+}
+function addUnit(c) {                                       // единица поглощает выделенное внутри себя
+  const inside = new Set(partsUnder(c));
+  selMany = selMany.filter(n => !partsUnder(n).every(j => inside.has(j)));
+  selOne = selOne.filter(j => !inside.has(j));
+  selMany.push(c);
+}
+// Телефон: касание детали — деталь, каждое следующее по ней же — сборочная единица ступенью выше, после самой
+// верхней — снять (Алексей 01.10). У дверей и ящиков — долгим нажатием (короткое открывает).
+function stepSel(i) {
+  const plain = !selMany.length && !selOne.length;
+  let cur;
+  if (plain && selNode === null && selIdx === i) cur = null;
+  else if (plain && selNode !== null && selSet.includes(i)) cur = selNode;
+  else { selectPart(i, -1); return; }
+  const c = asmAbove(i, cur);
+  if (c < 0) { clearSel(); return; }
+  const k = parts[i].v.indexOf(c);
+  if (k >= 0) selectPart(i, k); else selectNode(c);
+}
+function paint() {
+  const on = new Set(selSet);
+  parts.forEach((p, i) => {
+    for (const m of p.meshes) {
+      if (drawOn && m.userData.mat) { if (!m.userData.glass) m.material = on.has(i) ? DRAW_SEL : DRAW_MAT; continue; }
+      m.material.emissive.setHex(on.has(i) ? 0x2b6cb0 : 0x000000);
+      m.material.emissiveIntensity = on.has(i) ? 0.45 : 0;
+    }
+  });
+  const d = $('card');
+  if (!selSet.length) { d.style.display = 'none'; need(); gabShow(); return; }
+  d.style.display = 'block';
+  let title, sub;
+  const num = d => d ? ' · № ' + d : '';                 // обозначение из Базиса — номер как на этикетке
+  if (selMany.length || selOne.length) {
+    title = 'вибрано: ' + (selMany.length + selOne.length);
+    sub = selMany.map(id => nodes[id].name).concat(selOne.map(i => parts[i].n + num(parts[i].d))).join('; ');
+  } else if (selNode === null) {
+    const p = parts[selSet[0]];
+    title = p.n; sub = (KIND[p.kind] || '') + num(p.d);
+  } else {
+    title = nodes[selNode].name; sub = selSet.length + ' об’єктів' + num(M.ndes && M.ndes[selNode]);
+  }
+  d.innerHTML = '<b></b><small></small><div class="chain"></div><div class="cbtn"><button>сховати</button><button>тільки це</button>' +
+    (TOUCH ? '<button class="add' + (addMode ? ' on' : '') + '">＋ додати</button>' : '') + '</div>';
+  d.children[0].textContent = title || '(без назви)';
+  d.children[1].textContent = sub || '';
+  // цепочка «изделие ▸ модуль ▸ ящик ▸ фасад»: щелчок по звену выделяет весь этот узел,
+  // «скрыть» / «только это» работают для выделенного звена; цепочка остаётся, можно ходить вверх-вниз
+  const ch = d.children[2];
+  const add = (text, on, cur) => {
+    if (ch.childNodes.length) ch.appendChild(document.createTextNode(' ▸ '));
+    const a = document.createElement('span'); a.className = 'lnk' + (cur ? ' cur' : ''); a.textContent = text || '(без назви)';
+    a.onclick = e => { e.stopPropagation(); on(); };
+    ch.appendChild(a);
+  };
+  if (selMany.length || selOne.length) {
+    // набор шкафов и деталей: цепочки нет
+  } else if (chainPart >= 0 && selSet.includes(chainPart)) {
+    const p = parts[chainPart];
+    for (const id of p.v.slice().reverse()) add(M.names[id], () => selectChain(id), selNode === id);
+    add(p.n, () => selectChain(null), selNode === null);
+  } else {
+    const any = parts[selSet[0]], chainOf = selNode === null ? any.v : any.v.slice(Math.max(0, any.v.indexOf(selNode)));
+    for (const id of chainOf.slice().reverse()) add(M.names[id], () => selectNode(id), selNode === id);
+  }
+  const bs = d.querySelectorAll('.cbtn button');
+  bs[0].onclick = () => hideSel();
+  bs[1].onclick = () => { isolateSel(); clearSel(); fitVisible(); };
+  if (bs[2]) bs[2].onclick = e => { e.stopPropagation(); addMode = !addMode; bs[2].classList.toggle('on', addMode); };
+  need(); gabShow();
+}
+// любая смена выделения (щелчок, Tab, Ctrl, дерево, цепочка карточки) проходит через paint → габарит следует за ней
+
+// ---------------- дерево ----------------
+const tbody = $('tbody');
+function nodeRow(nd, depth) {
+  const r = document.createElement('div');
+  r.className = 'tr' + (selNode === nd.id || selMany.includes(nd.id) ? ' sel' : '') + (nodeOff(nd) ? ' off' : '');
+  r.style.paddingLeft = (4 + depth * 14) + 'px';
+  const hasKids = nd.kids.length + nd.parts.length > 0;
+  r.innerHTML = '<span class="cr"></span><input type="checkbox"><span class="nm"></span><span class="tp"></span>';
+  r.children[0].textContent = hasKids ? (nd.open ? '▾' : '▸') : '';
+  r.children[1].checked = !nd.hidden;
+  r.children[2].textContent = nd.name;
+  r.children[3].textContent = ((M.ntype && NTYPE[M.ntype[nd.id]]) || 'вузол') + ' · ' + nd.count;
+  r.children[0].onclick = e => { e.stopPropagation(); nd.open = !nd.open; renderTree(); };
+  r.children[1].onclick = e => { e.stopPropagation(); pushUndo(); nd.hidden = !r.children[1].checked; applyVis(); renderTree(); };
+  r.onclick = () => selectNode(nd.id);
+  r.ondblclick = () => { selectNode(nd.id); fitBox(visibleBox(true)); };
+  return r;
+}
+function partRow(i, depth) {
+  const p = parts[i];
+  const r = document.createElement('div');
+  r.className = 'tr' + ((selNode === null && !selMany.length && selSet.includes(i)) || selOne.includes(i) ? ' sel' : '') + (effVisible(p) ? '' : ' off');
+  r.style.paddingLeft = (4 + depth * 14) + 'px';
+  r.innerHTML = '<span class="cr"></span><input type="checkbox"><span class="nm"></span><span class="tp"></span>';
+  r.children[1].checked = !p.hidden;
+  r.children[2].textContent = p.n || '(без назви)';
+  r.children[3].textContent = KIND[p.kind] || '';
+  r.children[1].onclick = e => { e.stopPropagation(); pushUndo(); p.hidden = !r.children[1].checked; applyVis(); renderTree(); };
+  r.onclick = () => selectPart(i, -1);
+  r.ondblclick = () => { selectPart(i, -1); fitBox(visibleBox(true)); };
+  return r;
+}
+function nodeOff(nd) {
+  for (let id = nd.id; id !== -1; id = nodes[id].parent) if (nodes[id].hidden) return true;
+  return false;
+}
+function renderTree() {
+  if ($('tree').classList.contains('hidden')) return;
+  const q = $('q').value.trim().toLowerCase();
+  const frag = document.createDocumentFragment();
+  if (q) {
+    let n = 0;
+    for (const k in nodes) if (nodes[k].name.toLowerCase().includes(q) && n++ < 300) frag.appendChild(nodeRow(nodes[k], 0));
+    parts.forEach((p, i) => {
+      if (n >= 300) return;
+      if ((p.n || '').toLowerCase().includes(q)) { frag.appendChild(partRow(i, 0)); n++; }
+    });
+  } else {
+    const walk = (ids, pis, depth) => {
+      for (const id of ids) {
+        const nd = nodes[id]; frag.appendChild(nodeRow(nd, depth));
+        if (nd.open) walk(nd.kids, nd.parts, depth + 1);
+      }
+      for (const i of pis) frag.appendChild(partRow(i, depth));
+    };
+    walk(rootKids, rootParts, 0);
+  }
+  const st = tbody.scrollTop;
+  tbody.replaceChildren(frag);
+  tbody.scrollTop = st;
+}
+function revealInTree() {
+  if (selIdx >= 0) {
+    const h = parts[selIdx].v;
+    const upto = selNode === null ? 0 : h.indexOf(selNode) + 1;
+    for (let k = h.length - 1; k >= upto; k--) nodes[h[k]].open = true;
+  }
+  renderTree();
+  const s = tbody.querySelector('.tr.sel');
+  if (s) s.scrollIntoView({ block: 'nearest' });
+}
+
+// ---------------- линейка ----------------
+let ruler = false, rp = [], rline = null;
+// Точка рулетки — всегда угол (вершина) детали; в произвольное место поверхности точка не ставится.
+// Углы берутся у ВСЕХ деталей рядом с курсором, а не только у той, что под ним (замечание 26.09: у раздвижки
+// под курсором неподвижная часть — к двери было не прицепиться). Угол, закрытый от глаза другой поверхностью,
+// не берётся (цепляло задний угол вместо переднего). Из видимых — ближайший к курсору; если несколько почти
+// в одной точке экрана — тот, что ближе к смотрящему.
+const SNAP_R = [40, 150];          // сначала ищем в круге 40 точек экрана, не нашли — в 150
+let curMode = 1;
+function uniqVerts(m) {            // у каждого угла несколько треугольников — считаем угол один раз
+  if (m.userData.uv) return m.userData.uv;
+  const pos = m.geometry.attributes.position, seen = new Set(), out = [];
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+    const k = Math.round(x * 10) + ',' + Math.round(y * 10) + ',' + Math.round(z * 10);
+    if (seen.has(k)) continue; seen.add(k); out.push(x, y, z);
+  }
+  return (m.userData.uv = new Float32Array(out));
+}
+function shown(o) { for (; o; o = o.parent) if (!o.visible) return false; return true; }
+const occRay = new THREE.Raycaster();
+// угол виден, если между глазом и ним нет непрозрачной поверхности (в режимах «полупрозрачно» и «рёбра» видно всё)
+function pointVisible(p) {
+  if (curMode !== 1) return true;
+  const dir = cam.getWorldDirection(new THREE.Vector3());
+  let from, dist;
+  if (cam.isPerspectiveCamera) { from = cam.position.clone(); dist = p.distanceTo(from); dir.copy(p).sub(from).normalize(); }
+  else { dist = rad * 30; from = p.clone().addScaledVector(dir, -dist); }
+  occRay.set(from, dir); occRay.near = 0; occRay.far = dist - (1 + dist * 0.0005);
+  for (const h of occRay.intersectObjects(picks, false)) {
+    const mt = h.object.material;
+    if (!mt.visible || mt.transparent || cutAway(h.point)) continue;
+    if (shown(h.object)) return false;
+  }
+  return true;
+}
+function snapAt(cx, cy, radii) {
+  root.updateMatrixWorld(true);
+  const persp = cam.isPerspectiveCamera, fwd = cam.getWorldDirection(new THREE.Vector3());
+  const pxPerMm = d => persp ? innerHeight / 2 / (d * Math.tan(THREE.MathUtils.degToRad(cam.fov / 2)))
+                             : innerHeight / (cam.top - cam.bottom);
+  const toPx = s => [(s.x + 1) / 2 * innerWidth, (1 - s.y) / 2 * innerHeight];
+  const c = new THREE.Vector3(), v = new THREE.Vector3(), s = new THREE.Vector3();
+  for (const R of (radii || SNAP_R)) {
+    // в одной точке экрана (сетка 2×2) держим только ближний к глазу угол: дальние за ним всё равно не видны,
+    // а у мелкой фурнитуры сотни углов — без этого проверка видимости тонула в них
+    const cell = new Map();
+    for (const pr of parts) {
+      if (pr.isL || !pr.g.visible) continue;
+      for (const m of pr.meshes) {
+        if (!shown(m)) continue;
+        // сначала грубо: шар вокруг куска на экране далеко от курсора — пропускаем весь кусок
+        const g = m.geometry; if (!g.boundingSphere) g.computeBoundingSphere();
+        c.copy(g.boundingSphere.center).applyMatrix4(m.matrixWorld);
+        const depth = c.clone().sub(cam.position).dot(fwd), r = g.boundingSphere.radius;
+        if (persp && depth <= r) { /* кусок у самого глаза — проверяем целиком */ }
+        else {
+          const [sx, sy] = toPx(s.copy(c).project(cam));
+          if (Math.hypot(sx - cx, sy - cy) > r * pxPerMm(persp ? depth - r : 1) + R) continue;
+        }
+        const uv = uniqVerts(m), mw = m.matrixWorld;
+        for (let i = 0; i < uv.length; i += 3) {
+          v.set(uv[i], uv[i + 1], uv[i + 2]).applyMatrix4(mw);
+          if (cutAway(v)) continue;
+          s.copy(v).project(cam);
+          if (s.z > 1 || s.z < -1) continue;
+          const [px, py] = toPx(s), d = Math.hypot(px - cx, py - cy);
+          if (d > R) continue;
+          const key = Math.round(px / 2) + ',' + Math.round(py / 2), z = v.clone().sub(cam.position).dot(fwd), o = cell.get(key);
+          if (!o || z < o.z) cell.set(key, { p: v.clone(), d, z });
+        }
+      }
+    }
+    const cand = [...cell.values()];
+    if (!cand.length) continue;
+    cand.sort((a, b) => a.d - b.d);
+    let best = null, d0 = 0, tested = 0;
+    for (const k of cand) {
+      if (best && k.d > d0 + 4) break;
+      if (++tested > 250) break;
+      if (!pointVisible(k.p)) continue;
+      if (!best) { best = k; d0 = k.d; } else if (k.z < best.z - 0.5) best = k;
+    }
+    if (best) return best.p;
+  }
+  return null;
+}
+// ---------------- рулетка по граням ----------------
+// Способ «грани» (основной, замечание 27.09): коснулся грани детали — она подсвечена и держится, на детали
+// появляются два её больших размера (толщину не показываем). Ведёшь палец ко второй грани — подсвечивается
+// только грань, параллельная первой; отпустил на ней — размер строго поперёк граней (на сколько утоплена полка
+// от стойки). Коснулся пустого места — замер сброшен. Способ «точки» — прежний, от угла до угла.
+let rmode = 'easy';                                    // для заказчика по умолчанию — лёгкие размеры
+try { rmode = localStorage.getItem('viewerRMode2') || 'easy'; } catch (e) {}
+let face1 = null, faceHov = null;
+const partDims = [];
+const PAR = 0.9995;                                   // «параллельно» — расхождение меньше 2°
+function faceAt(cx, cy) {
+  const h = pick(cx, cy); if (!h || !h.face) return null;
+  const m = h.object, nl = h.face.normal.clone().normalize();
+  const pl = m.worldToLocal(h.point.clone());
+  const n = nl.clone().applyMatrix3(new THREE.Matrix3().getNormalMatrix(m.matrixWorld)).normalize();
+  return { m, nl, dl: nl.dot(pl), n, p: h.point.clone(), idx: m.userData.idx };
+}
+function sameFace(a, b) { return a.m.parent === b.m.parent && Math.abs(a.nl.dot(b.nl)) > PAR && Math.abs(Math.abs(a.dl) - Math.abs(b.dl)) < 0.3; }
+// подсветка грани: все треугольники детали в той же плоскости
+function faceHL(f, color, opacity) {
+  const out = [], a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), n = new THREE.Vector3(), e = new THREE.Vector3();
+  for (const mm of parts[f.idx].meshes) {
+    if (mm.parent !== f.m.parent) continue;
+    const pos = mm.geometry.attributes.position;
+    for (let i = 0; i + 2 < pos.count; i += 3) {
+      a.fromBufferAttribute(pos, i); b.fromBufferAttribute(pos, i + 1); c.fromBufferAttribute(pos, i + 2);
+      n.subVectors(b, a).cross(e.subVectors(c, a)); const L = n.length(); if (L < 1e-9) continue; n.divideScalar(L);
+      if (Math.abs(n.dot(f.nl)) < PAR || Math.abs(f.nl.dot(a) - f.dl) > 0.3) continue;
+      out.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
+    }
+  }
+  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(out, 3));
+  const hl = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color, transparent: true, opacity, side: THREE.DoubleSide,
+    depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 }));
+  hl.renderOrder = 5; f.m.parent.add(hl); f.hl = hl; need();
+  return hl;
+}
+function dropHL(f) { if (f && f.hl) { f.hl.parent.remove(f.hl); f.hl.geometry.dispose(); f.hl = null; need(); } }
+// ведём палец/мышь: подсветить грань под ним (при выбранной первой — только параллельную)
+function faceHover(cx, cy) {
+  const f = faceAt(cx, cy);
+  const ok = !!f && (!face1 || Math.abs(f.n.dot(face1.n)) > PAR) && !(face1 && sameFace(f, face1));
+  if (faceHov && !(ok && sameFace(faceHov, f))) { dropHL(faceHov); faceHov = null; }
+  if (ok && !faceHov) { faceHov = f; faceHL(f, 0x2b6cb0, 0.35); }
+  return f;
+}
+function faceHoverEnd() { dropHL(faceHov); faceHov = null; }
+function setFace1(f) {
+  clearFace1(); face1 = f; faceHL(f, DIMC, 0.45); showPartDims(f.idx);
+  $('st').textContent += ' — торкніться другої грані, паралельної першій (порожнє місце — скинути)'; showPending();
+}
+function clearFace1() { dropHL(face1); face1 = null; showPending(); }
+// отпустили на грани (или мимо)
+function faceClick(f, mouse) {
+  if (!f) { if (face1) { clearFace1(); $('st').textContent = 'рулетка: торкніться грані деталі'; } return; }
+  if (!face1) { setFace1(f); return; }
+  if (sameFace(f, face1)) return;
+  if (Math.abs(f.n.dot(face1.n)) <= PAR) { toast('ця грань не паралельна першій — виберіть підсвічену паралельну'); return; }
+  // расстояние между плоскостями — по нормали первой грани; размер от точки касания второй грани до первой плоскости
+  const n1 = face1.n.clone(), d = f.p.clone().sub(face1.p).dot(n1);
+  clearFace1(); $('st').textContent = 'рулетка: торкніться грані деталі';
+  if (Math.abs(d) < 0.5) { toast('грані в одній площині — 0 мм'); return; }
+  dropPartDims();                          // нужен зазор между гранями — размеры первой детали убираем
+  const b = f.p.clone(), a = b.clone().addScaledVector(n1, -d);
+  const dm = addDim(a, b);
+  if (mouse && dm.axis) placing = { dm, base: a.clone().add(b).multiplyScalar(0.5) };
+}
+// два больших размера детали (толщину не показываем) — на рёбрах, ближних к смотрящему
+function dropPartDims() { while (partDims.length) { const dm = partDims.pop(); if (dims.includes(dm)) removeDim(dm); } }
+function showPartDims(i) {
+  dropPartDims();
+  const pr = parts[i]; if (!pr || !pr.meshes.length) return;
+  const box = new THREE.Box3();
+  for (const m of pr.meshes) { const g = m.geometry; if (!g.boundingBox) g.computeBoundingBox(); box.union(g.boundingBox); }
+  const mw = pr.meshes[0].parent.matrixWorld, s = box.getSize(new THREE.Vector3());
+  const ks = ['x', 'y', 'z'].sort((p, q) => s[q] - s[p]).slice(0, 2);
+  const eye = cam.position, fwd = cam.getWorldDirection(new THREE.Vector3());
+  for (const k of ks) {
+    const [o1, o2] = ['x', 'y', 'z'].filter(q => q !== k);
+    let best = null, bz = Infinity;
+    for (const u of [box.min[o1], box.max[o1]]) for (const w of [box.min[o2], box.max[o2]]) {
+      const a = new THREE.Vector3(), b = new THREE.Vector3();
+      a[k] = box.min[k]; b[k] = box.max[k]; a[o1] = b[o1] = u; a[o2] = b[o2] = w;
+      a.applyMatrix4(mw); b.applyMatrix4(mw);
+      const mid = a.clone().add(b).multiplyScalar(0.5);
+      const z = cam.isPerspectiveCamera ? mid.distanceTo(eye) : mid.dot(fwd);
+      if (z < bz) { bz = z; best = [a, b]; }
+    }
+    if (best && best[0].distanceTo(best[1]) > 0.5) partDims.push(addDim(best[0], best[1]));
+  }
+  $('st').textContent = 'деталь ' + fmt(s[ks[0]]) + ' × ' + fmt(s[ks[1]]) + ' мм';
+}
+// ---------------- габарит выделенного ----------------
+// Способ рулетки «габарит» (Алексей 29.09): щелчок выделяет, Tab/Shift+Tab — выше/ниже, Ctrl — деталь, Shift — сборочная единица (ещё раз — выше);
+// на экране ОДИН габарит (ширина, висота, глибина) — пересчитывается при каждой смене выделения.
+// Поворот — по габаритной рамке ближайшего фрагмента (выгрузка: M.nfax), числа — по самим видимым деталям в том
+// положении, что на экране. Нет рамки или шкафы набора стоят по-разному — по осям комнаты.
+const gabDims = [];
+function gabShow() {
+  // рулетка выключена, другой способ или выделение снято — прежний габарит остаётся как есть (стереть — корзина)
+  if (!ruler || rmode !== 'gab' || !selSet.length) return;
+  while (gabDims.length) { const dm = gabDims.pop(); if (dims.includes(dm)) removeDim(dm); }
+  const n0 = dims.length;
+  selGab();
+  for (let k = n0; k < dims.length; k++) gabDims.push(dims[k]);
+}
+function frameNodeFor(i, from) {
+  const h = parts[i].h;
+  for (let k = Math.max(0, from); k < h.length; k++) if (M.nfax && M.nfax[h[k]]) return h[k];
+  return -1;
+}
+function frameAxesNow(i, fid) {             // оси рамки с учётом открытых дверей/ящиков над ней (и её самой)
+  const h = parts[i].h, k = h.indexOf(fid), m = new THREE.Matrix4();
+  for (const id of parts[i].chainA) if (h.indexOf(id) >= k) m.multiply(screwMatrix(animNode[id]));
+  const q = new THREE.Quaternion(); m.decompose(new THREE.Vector3(), q, new THREE.Vector3());
+  return M.nfax[fid].map(a => new THREE.Vector3(a[0], a[1], a[2]).normalize().applyQuaternion(q));
+}
+function selGab() {
+  if (!selSet.length) return false;
+  const ref = [];
+  if (selMany.length || selOne.length) {
+    for (const n of selMany) { const i = partsUnder(n)[0]; if (i !== undefined) ref.push([i, parts[i].h.indexOf(n)]); }
+    for (const i of selOne) ref.push([i, 0]);
+  } else if (selNode !== null) ref.push([selSet[0], parts[selSet[0]].h.indexOf(selNode)]);
+  else ref.push([selSet[0], 0]);
+  let ax = null;
+  for (const [i, from] of ref) {
+    const f = frameNodeFor(i, from); if (f < 0) { ax = null; break; }
+    const a = frameAxesNow(i, f);
+    if (!ax) ax = a; else if (!a.every((v, q) => Math.abs(v.dot(ax[q])) > 0.999)) { ax = null; break; }
+  }
+  if (ax) {                                  // выровнять в строгий прямой угол
+    ax[1].addScaledVector(ax[0], -ax[1].dot(ax[0])).normalize();
+    ax[2] = new THREE.Vector3().crossVectors(ax[0], ax[1]).normalize();
+  } else ax = [new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 1)];
+  const mn = [Infinity, Infinity, Infinity], mx = [-Infinity, -Infinity, -Infinity], v = new THREE.Vector3();
+  for (const i of selSet) {
+    const p = parts[i]; if (!effVisible(p)) continue;
+    for (const m of p.meshes) {
+      m.updateWorldMatrix(true, false);
+      const pos = m.geometry.attributes.position;
+      for (let t = 0; t < pos.count; t++) {
+        v.fromBufferAttribute(pos, t).applyMatrix4(m.matrixWorld);
+        for (let q = 0; q < 3; q++) { const d = v.dot(ax[q]); if (d < mn[q]) mn[q] = d; if (d > mx[q]) mx[q] = d; }
+      }
+    }
+  }
+  if (!isFinite(mn[0])) return false;
+  const P = c => ax[0].clone().multiplyScalar(c[0]).addScaledVector(ax[1], c[1]).addScaledVector(ax[2], c[2]);
+  const up = ax.map(a => Math.abs(a.y)), hi = up.indexOf(Math.max(...up)), rest = [0, 1, 2].filter(q => q !== hi);
+  const label = []; label[hi] = 'висота'; label[rest[0]] = 'ширина'; label[rest[1]] = 'глибина';
+  // Разводка как на чертеже (замечание 29.09: размеры сквозь шкаф, надписи друг на друге): ширина — по нижнему
+  // ребру ближней к смотрящему стороны, высота — по вертикальному ребру ближнего бока, глибина — по нижнему ребру
+  // этого бока; каждый отнесён наружу от габарита, надписи на трёх разных рёбрах.
+  const W = rest[0], D = rest[1], H = hi;
+  const eye = cam.position, fwd = cam.getWorldDirection(new THREE.Vector3());
+  const near = (k) => {                        // какой из двух краёв по оси k ближе к смотрящему
+    const c = [0, 1, 2].map(q => (mn[q] + mx[q]) / 2);
+    const a = c.slice(), b = c.slice(); a[k] = mn[k]; b[k] = mx[k];
+    const za = cam.isPerspectiveCamera ? P(a).distanceTo(eye) : P(a).dot(fwd), zb = cam.isPerspectiveCamera ? P(b).distanceTo(eye) : P(b).dot(fwd);
+    return za <= zb ? mn[k] : mx[k];
+  };
+  const low = ax[H].y >= 0 ? mn[H] : mx[H];     // низ габарита
+  const out = (k, at) => ax[k].clone().multiplyScalar(at === mn[k] ? -1 : 1);   // наружу от края at по оси k
+  const gap = Math.max(40, Math.min(150, 0.05 * Math.max(mx[W] - mn[W], mx[H] - mn[H], mx[D] - mn[D])));
+  const dF = near(D), wS = near(W);
+  const put = (k, fix, off) => {
+    if (mx[k] - mn[k] < 0.5) return;
+    const c1 = [0, 0, 0], c2 = [0, 0, 0]; c1[k] = mn[k]; c2[k] = mx[k];
+    for (const [q, v] of fix) { c1[q] = c2[q] = v; }
+    let a = P(c1), b = P(c2);
+    const dm = addDim(a, b, { label: label[k] });
+    if (dm.axis) { dm.off.copy(off); buildDim(dm); }         // по оси комнаты — выносные линии с отступом
+    else { dm.a.add(off); dm.b.add(off); buildDim(dm); }     // косой (развёрнутое изделие) — сам отодвинут
+  };
+  put(W, [[H, low], [D, dF]], out(H, low).multiplyScalar(gap));
+  put(H, [[W, wS], [D, dF]], out(W, wS).multiplyScalar(gap));
+  put(D, [[H, low], [W, wS]], out(H, low).multiplyScalar(gap).addScaledVector(out(W, wS), gap));
+  updRuler(); need();
+  $('st').textContent = 'габарит: ширина ' + fmt(mx[rest[0]] - mn[rest[0]]) + ', висота ' + fmt(mx[hi] - mn[hi]) + ', глибина ' + fmt(mx[rest[1]] - mn[rest[1]]) + ' мм';
+  return true;
+}
+// ---------------- рулетка по рёбрам ----------------
+// Способ «рёбра» (замечание 27.09): в строгом виде грань видна линией — коснулся ребра, оно подсвечено;
+// коснулся второго, параллельного — размер поперёк между ними. В строгом виде (без перспективы) мерим
+// в плоскости экрана: сверху — только расстояние по плану, разница по высоте не подмешивается.
+let edge1 = null, edgeHov = null;
+function edgeAt(cx, cy) {
+  root.updateMatrixWorld(true);
+  const R = TOUCH ? 24 : 12, A = new THREE.Vector3(), B = new THREE.Vector3(), sa = new THREE.Vector3(), sb = new THREE.Vector3();
+  const toPx = s => [(s.x + 1) / 2 * innerWidth, (1 - s.y) / 2 * innerHeight];
+  // сначала грубо, как у углов: шар вокруг набора рёбер на экране далеко от курсора — весь набор мимо
+  // (08.10: в гардеробной 050_8 — 462 тыс. рёбер, полный перебор на каждое движение мыши давал ~0,25 с и дёрганый прицел)
+  const persp = cam.isPerspectiveCamera, fwd = cam.getWorldDirection(new THREE.Vector3()), c = new THREE.Vector3(), s = new THREE.Vector3();
+  const pxPerMm = d => persp ? innerHeight / 2 / (d * Math.tan(THREE.MathUtils.degToRad(cam.fov / 2))) : innerHeight / (cam.top - cam.bottom);
+  const near = ln => {
+    const g = ln.geometry; if (!g.boundingSphere) g.computeBoundingSphere();
+    const sc = ln.matrixWorld.getMaxScaleOnAxis(), r = g.boundingSphere.radius * sc;
+    c.copy(g.boundingSphere.center).applyMatrix4(ln.matrixWorld);
+    const depth = c.clone().sub(cam.position).dot(fwd);
+    if (persp && depth <= r) return true;
+    const [sx, sy] = toPx(s.copy(c).project(cam));
+    return Math.hypot(sx - cx, sy - cy) <= r * pxPerMm(persp ? depth - r : 1) + R;
+  };
+  const cand = [];
+  for (const pr of parts) {
+    // в кресленні цепляемся ещё за рёбра фурнитуры (ножка) и отрезки помещения (линия чистого пола)
+    const src = drawOn ? (pr.isL ? pr.g.children.filter(o => o.isLineSegments) : pr.edges.concat(pr.dEdges || [])) : pr.edges;
+    if (!pr.g.visible || !src.length) continue;
+    for (const ln of src) {
+      if (ln.userData.mark && drawOn) continue;               // значки крепежа в кресленні спрятаны — к ним не цепляемся
+      if (!near(ln)) continue;
+      const pos = ln.geometry.attributes.position, mw = ln.matrixWorld;
+      for (let i = 0; i + 1 < pos.count; i += 2) {
+        A.fromBufferAttribute(pos, i).applyMatrix4(mw); B.fromBufferAttribute(pos, i + 1).applyMatrix4(mw);
+        sa.copy(A).project(cam); sb.copy(B).project(cam);
+        if (sa.z > 1 || sb.z > 1) continue;
+        const [ax, ay] = toPx(sa), [bx, by] = toPx(sb), vx = bx - ax, vy = by - ay, L2 = vx * vx + vy * vy;
+        if (L2 < 4) continue;                                   // ребро смотрит на нас — точка, не линия
+        const t = Math.max(0, Math.min(1, ((cx - ax) * vx + (cy - ay) * vy) / L2));
+        const d = Math.hypot(ax + vx * t - cx, ay + vy * t - cy);
+        if (d <= R) cand.push({ d, a: A.clone(), b: B.clone(), t });
+      }
+    }
+  }
+  cand.sort((p, q) => p.d - q.d);
+  for (const k of cand.slice(0, 40)) {
+    const p = k.a.clone().lerp(k.b, k.t);
+    if (cutAway(p) || !pointVisible(p)) continue;
+    return { a: k.a, b: k.b, p, dir: k.b.clone().sub(k.a).normalize() };
+  }
+  return null;
+}
+function edgeHL(e, color) {
+  // толщина подсветки — около 3 точек экрана
+  const mid = e.a.clone().add(e.b).multiplyScalar(0.5);
+  const mmPx = cam.isPerspectiveCamera ? 2 * mid.distanceTo(cam.position) * Math.tan(THREE.MathUtils.degToRad(cam.fov / 2)) / innerHeight
+                                       : (cam.top - cam.bottom) / innerHeight;
+  const len = e.a.distanceTo(e.b), r = mmPx * 1.8;
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, 6), new THREE.MeshBasicMaterial({ color, depthTest: false }));
+  m.position.copy(mid); m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), e.dir); m.renderOrder = 12;
+  scene.add(m); e.hl = m; need();
+}
+function dropEdge(e) { if (e && e.hl) { scene.remove(e.hl); e.hl.geometry.dispose(); e.hl = null; need(); } }
+const sameEdge = (e, f) => e.a.distanceTo(f.a) + e.b.distanceTo(f.b) < 0.5 || e.a.distanceTo(f.b) + e.b.distanceTo(f.a) < 0.5;
+function edgeHover(cx, cy) {
+  const e = edgeAt(cx, cy);
+  const ok = !!e && (!edge1 || (Math.abs(e.dir.dot(edge1.dir)) > PAR && !sameEdge(e, edge1)));
+  if (edgeHov && !(ok && sameEdge(edgeHov, e))) { dropEdge(edgeHov); edgeHov = null; }
+  if (ok && !edgeHov) { edgeHov = e; edgeHL(e, 0x2b6cb0); }
+  return e;
+}
+function edgeHoverEnd() { dropEdge(edgeHov); edgeHov = null; }
+function clearEdge1() { dropEdge(edge1); edge1 = null; showPending(); }
+function edgeClick(e, mouse) {
+  if (!e) { if (edge1) { clearEdge1(); $('st').textContent = 'рулетка: торкніться ребра деталі'; } return; }
+  if (!edge1) {
+    edge1 = e; edgeHL(e, DIMC); showPending();
+    $('st').textContent = 'рулетка: торкніться другого ребра, паралельного першому (порожнє місце — скинути)'; return;
+  }
+  if (sameEdge(e, edge1)) return;
+  if (Math.abs(e.dir.dot(edge1.dir)) <= PAR) { toast('це ребро не паралельне першому — виберіть підсвічене паралельне'); return; }
+  // поперёк рёбер; в строгом виде без перспективы — ещё и без составляющей «к смотрящему»
+  const w = e.p.clone().sub(edge1.p), d = edge1.dir;
+  const perp = w.clone().addScaledVector(d, -w.dot(d));
+  if (!cam.isPerspectiveCamera) {
+    const v = cam.getWorldDirection(new THREE.Vector3()), vp = v.clone().addScaledVector(d, -v.dot(d));
+    if (vp.lengthSq() > 1e-6) { vp.normalize(); perp.addScaledVector(vp, -perp.dot(vp)); }
+  }
+  clearEdge1(); $('st').textContent = 'рулетка: торкніться ребра деталі';
+  if (perp.length() < 0.5) { toast('ребра на одній лінії — 0 мм'); return; }
+  const b = e.p.clone(), a = b.clone().sub(perp);
+  const dm = addDim(a, b);
+  if (mouse && dm.axis) placing = { dm, base: a.clone().add(b).multiplyScalar(0.5) };
+}
+// ---------------- рулетка «до стін» ----------------
+// Способ «до стін» (Алексей 08.10): заказчик спрашивает, на какой высоте полка и сколько от неё до стены, а пола и
+// стен в модели нет — есть только линии помещения («Слой 0»: зелёная линия пола, чёрные рёбра стен). Указал
+// плоскость детали и линию помещения, в любом порядке, — размер поперёк плоскости до этой линии. Годятся только пары
+// «плоскость примерно параллельна линии»: низ полки — к линии пола (высота), бок полки — к ребру стены или к линии
+// пола вдоль стены (до стены). Указана плоскость — подсвечены все подходящие к ней линии; указана линия — под курсором
+// подсвечиваются только подходящие плоскости. Линия к плоскости наискосок (стена завалена) — размер до середины
+// линии, то есть средний; погрешность до 10 мм Алексея устраивает.
+const WPAR = Math.sin(THREE.MathUtils.degToRad(10));    // «примерно параллельно» — до 10°
+let wall1 = null, wallHov = null;
+const wallHints = [];
+const lineFits = (e, f) => Math.abs(e.dir.dot(f.n)) < WPAR;
+// линия помещения под курсором (fit — только подходящие); видимая — в первую очередь, но линия пола под шкафом
+// тоже берётся: за неё и меряют
+function roomLineAt(cx, cy, fit) {
+  root.updateMatrixWorld(true);
+  const R = TOUCH ? 24 : 12, A = new THREE.Vector3(), B = new THREE.Vector3(), sa = new THREE.Vector3(), sb = new THREE.Vector3();
+  const toPx = s => [(s.x + 1) / 2 * innerWidth, (1 - s.y) / 2 * innerHeight];
+  const cand = [];
+  for (const pr of parts) {
+    if (!pr.isL || !pr.g.visible) continue;
+    for (const ln of pr.g.children) {
+      if (!ln.isLineSegments) continue;
+      const pos = ln.geometry.attributes.position, mw = ln.matrixWorld;
+      for (let i = 0; i + 1 < pos.count; i += 2) {
+        A.fromBufferAttribute(pos, i).applyMatrix4(mw); B.fromBufferAttribute(pos, i + 1).applyMatrix4(mw);
+        if (A.distanceTo(B) < 1) continue;
+        const e = { a: A.clone(), b: B.clone(), dir: B.clone().sub(A).normalize() };
+        if (fit && !fit(e)) continue;
+        sa.copy(A).project(cam); sb.copy(B).project(cam);
+        if (sa.z > 1 || sb.z > 1) continue;
+        const [ax, ay] = toPx(sa), [bx, by] = toPx(sb), vx = bx - ax, vy = by - ay, L2 = vx * vx + vy * vy;
+        let d, t = 0;
+        if (L2 < 4) d = Math.hypot(ax - cx, ay - cy);              // ребро стены сверху — точка
+        else { t = Math.max(0, Math.min(1, ((cx - ax) * vx + (cy - ay) * vy) / L2)); d = Math.hypot(ax + vx * t - cx, ay + vy * t - cy); }
+        if (d <= R) { e.d = d; e.p = e.a.clone().lerp(e.b, t); cand.push(e); }
+      }
+    }
+  }
+  if (!cand.length) return null;
+  cand.sort((p, q) => p.d - q.d);
+  for (const k of cand.slice(0, 20)) if (pointVisible(k.p)) return k;
+  return cand[0];
+}
+// что под курсором: после плоскости — только подходящая линия (мимо — другая плоскость, ею заменить первую);
+// после линии — только плоскость; в начале — линия, если рядом, иначе плоскость
+function wallAt(cx, cy) {
+  if (wall1 && wall1.e) { const f = faceAt(cx, cy); return f ? { f } : null; }
+  const e = roomLineAt(cx, cy, wall1 ? (q => lineFits(q, wall1.f)) : null); if (e) return { e };
+  const f = faceAt(cx, cy); return f ? { f } : null;
+}
+const sameWall = (p, q) => !!p && !!q && (p.f ? !!q.f && sameFace(p.f, q.f) : !!q.e && sameEdge(p.e, q.e));
+function wallHL(w, color) { if (w.f) faceHL(w.f, color, 0.35); else edgeHL(w.e, color); }
+function wallDrop(w) { if (!w) return; if (w.f) dropHL(w.f); else dropEdge(w.e); }
+function wallHover(cx, cy) {
+  const w = wallAt(cx, cy);
+  const ok = !!w && !sameWall(w, wall1) && !(wall1 && wall1.e && !lineFits(wall1.e, w.f));
+  if (wallHov && !(ok && sameWall(wallHov, w))) { wallDrop(wallHov); wallHov = null; }
+  if (ok && !wallHov) { wallHov = w; wallHL(w, 0x2b6cb0); }
+  return w;
+}
+function wallHoverEnd() { wallDrop(wallHov); wallHov = null; }
+function dropWallHints() { while (wallHints.length) dropEdge(wallHints.pop()); }
+function clearWall1() { wallDrop(wall1); wall1 = null; dropWallHints(); showPending(); }
+// все линии помещения, до которых можно мерить от этой плоскости — бледной подсветкой
+function showWallHints(f) {
+  dropWallHints();
+  const A = new THREE.Vector3(), B = new THREE.Vector3();
+  for (const pr of parts) {
+    if (!pr.isL || !pr.g.visible) continue;
+    for (const ln of pr.g.children) {
+      if (!ln.isLineSegments) continue;
+      const pos = ln.geometry.attributes.position, mw = ln.matrixWorld;
+      for (let i = 0; i + 1 < pos.count && wallHints.length < 400; i += 2) {
+        A.fromBufferAttribute(pos, i).applyMatrix4(mw); B.fromBufferAttribute(pos, i + 1).applyMatrix4(mw);
+        if (A.distanceTo(B) < 1) continue;
+        const e = { a: A.clone(), b: B.clone(), dir: B.clone().sub(A).normalize() };
+        if (!lineFits(e, f)) continue;
+        edgeHL(e, 0x8fb8e8); wallHints.push(e);
+      }
+    }
+  }
+  return wallHints.length;
+}
+const WHINT = 'до стін: вкажіть площину деталі, потім лінію підлоги або межі приміщення (порядок будь-який)';
+function wallClick(w, mouse) {
+  if (!w) { if (wall1) { clearWall1(); $('st').textContent = WHINT; } return; }
+  if (sameWall(w, wall1)) return;
+  if (!wall1 || (wall1.f && w.f)) {                       // первое указание (или другая плоскость вместо первой)
+    clearWall1(); wall1 = w; wallHL(w, DIMC); showPending();
+    if (w.f) {
+      if (!showWallHints(w.f)) { toast('до цієї площини немає паралельної лінії приміщення — вкажіть іншу площину'); clearWall1(); $('st').textContent = WHINT; return; }
+      $('st').textContent = 'до стін: вкажіть підсвічену лінію підлоги або межі (порожнє місце — скинути)';
+    } else $('st').textContent = 'до стін: вкажіть площину деталі, паралельну лінії (порожнє місце — скинути)';
+    return;
+  }
+  const f = wall1.f || w.f, e = wall1.e || w.e;
+  if (!lineFits(e, f)) { toast('площина не паралельна лінії — вкажіть спочатку площину деталі, потім лінію підлоги або межі'); return; }
+  // поперёк плоскости до середины линии; размер — от точки, где указана плоскость
+  const n = f.n.clone(), mid = e.a.clone().add(e.b).multiplyScalar(0.5), d = mid.sub(f.p).dot(n);
+  clearWall1(); $('st').textContent = WHINT;
+  if (Math.abs(d) < 0.5) { toast('площина на самій лінії — 0 мм'); return; }
+  const a = f.p.clone(), b = a.clone().addScaledVector(n, d), down = b.y - a.y;
+  const label = Math.abs(n.y) > 0.9 ? (down < 0 ? 'від підлоги' : 'до стелі') : 'до стіни';
+  const dm = addDim(a, b, { label });
+  if (mouse && dm.axis) placing = { dm, base: a.clone().add(b).multiplyScalar(0.5) };
+}
+// ---------------- лёгкие размеры (для заказчика) ----------------
+// Способ по умолчанию (ТЗ-дополнение 28.09, раздел 3.2–3.3). Одно касание — один замер, новое гасит прежний.
+//  • кромка панели или фурнитура — размеры этой детали;
+//  • большая грань изнутри (задняя стенка, бок, полка) — ячейка в свету: от места касания лучи в стороны
+//    до ближайших деталей; не упёрся луч — размера в эту сторону нет;
+//  • дверь — открывается, после остановки размеры ячейки за ней; повторное касание — закрыть;
+//  • ящик — открывается; ширина и глубина внутри коробки как есть, высота полезная: от верха дна до низа
+//    ближайшего, что нависает над ящиком (с его фасадом), минус 6 мм, до целого; считается закрытым.
+// Штанга и подсветка — позже (нужна отметка в выгрузке).
+const easyDims = [];
+let easyCollect = null;   // креслення: размеры ячейки не ставятся, а собираются сюда (щелчковая цепочка выбирает нужный)
+let easyOpen = [];   // детали, чьи звенья открыли лёгкие размеры: ящик и дверь перед ним держатся вместе (05.10)
+function dropEasy() { while (easyDims.length) { const dm = easyDims.pop(); if (dims.includes(dm)) removeDim(dm); } dropPartDims(); }
+function easyDim(a, b, label, text) {
+  if (a.distanceTo(b) < 1) return;
+  // креслення: размер вдоль взгляда (глубина на виде спереди) на листе — точка, не ставим
+  if (drawOn && Math.abs(b.clone().sub(a).normalize().dot(cam.getWorldDirection(new THREE.Vector3()))) > 0.9) return;
+  if (easyCollect) { easyCollect.push({ a, b, label, text }); return; }   // креслення: только собрать, ставит цепочка
+  easyDims.push(addDim(a, b, { label, text }));
+}
+function mainAxis(v) { const a = ['x', 'y', 'z'].map(k => Math.abs(v[k])); return ['x', 'y', 'z'][a.indexOf(Math.max(...a))]; }
+function vec(o) { return new THREE.Vector3(o.x || 0, o.y || 0, o.z || 0); }
+const easyRay = new THREE.Raycaster();
+// ближайшая видимая деталь по лучу (линии «Слоя 0» и сам палец-деталь не в счёт)
+function rayHit(o, dir, skip) {
+  easyRay.set(o, dir); easyRay.near = 0.5; easyRay.far = rad * 10;
+  for (const h of easyRay.intersectObjects(picks, false)) {
+    if (!shown(h.object)) continue;
+    const pr = parts[h.object.userData.idx]; if (pr.isL || (skip && skip.has(h.object.userData.idx))) continue;
+    return h.point.clone();
+  }
+  return null;
+}
+function geomBox(i) {
+  const b = new THREE.Box3();
+  for (const m of parts[i].meshes) { const g = m.geometry; if (!g.boundingBox) g.computeBoundingBox(); b.union(g.boundingBox); }
+  return b;
+}
+// ---------------- ячейка: коробка из стенок вокруг щелчка (29.09, вместо лучей из одной точки) ----------------
+// Всё считается в координатах модели при закрытых дверях и ящиках. Направления берутся от щёлкнутой детали,
+// не от камеры: у полки длинная горизонталь — ширина, короткая — глубина; у стенки — по соседям.
+// Стенки ячейки — неподвижные панели (двери не в счёт). Внутри ячейки ищутся препятствия — всё, что стоит в ней
+// (брючница, корзина, ящик, вешалка — по форме, не по названию); крепёж, петли, полкодержатели не в счёт.
+// Штанга (тип «труба») — отдельно: до верха штанги и от штанги до полки над ней.
+let BOX = null;
+function boxOf(j) {   // в координатах модели, закрытое положение; у фурнитуры форма стоит через свою матрицу
+  if (!BOX) BOX = [];
+  if (BOX[j]) return BOX[j];
+  const b = new THREE.Box3(), pr = parts[j];
+  for (const m of pr.meshes) {
+    const g = m.geometry; if (!g.boundingBox) g.computeBoundingBox();
+    const bb = g.boundingBox.clone(); if (m.parent !== pr.g) bb.applyMatrix4(m.parent.matrix);
+    b.union(bb);
+  }
+  return (BOX[j] = b);
+}
+const toModel = p => root.worldToLocal(p.clone()), toWorld = p => root.localToWorld(p.clone());
+function chainFt(j) { return M.nft ? parts[j].h.map(id => M.nft[id] || '') : []; }
+const SMALL_RX = /петл|стяжк|полкодерж|заглушк|саморез|конфирмат|эксцентр|минификс|шкант|шуруп|ламел|демпф|tip-on|ручк/i;
+function isHardwareSmall(j) {
+  const ft = chainFt(j);
+  if (ft.includes('Петля') || ft.includes('стяжки межсекционные')) return true;
+  if (SMALL_RX.test(parts[j].n)) return true;
+  const s = boxOf(j).getSize(new THREE.Vector3());
+  return Math.max(s.x, s.y, s.z) < 60;
+}
+function isTube(j) { const ft = chainFt(j); return ft.includes('труба') || (!M.nft && /труба|штанг/i.test(parts[j].n)); }
+const isWall = j => { const p = parts[j]; return p.kind === 'p' && !p.chainA.length && !p.isDoor && !p.isL; };
+// ближайшая стенка от точки P по оси ax в сторону s (±1): её плоскость должна перекрывать P по двум другим осям
+function wallBound(P, ax, s, skip) {
+  const [o1, o2] = ['x', 'y', 'z'].filter(k => k !== ax);
+  let best = null, bj = -1;
+  parts.forEach((p, j) => {
+    if (!isWall(j) || (skip && skip.has(j))) return;
+    const b = boxOf(j);
+    if (P[o1] < b.min[o1] - 0.5 || P[o1] > b.max[o1] + 0.5 || P[o2] < b.min[o2] - 0.5 || P[o2] > b.max[o2] + 0.5) return;
+    const f = s > 0 ? b.min[ax] : b.max[ax];
+    if (s * (f - P[ax]) < -0.5) return;
+    if (best === null || s * (f - best) < 0) { best = f; bj = j; }
+  });
+  return best === null ? null : { v: best, j: bj };
+}
+function easyCell(pW, n, i) {
+  const P = toModel(pW), k = mainAxis(n), sn = Math.sign(n[k]) || 1, cb = boxOf(i), cs = cb.getSize(new THREE.Vector3());
+  const P0 = P.clone(); P0[k] += sn * 1;
+  let wAx, dAx;
+  if (k === 'y') {
+    // полка: ширина — где стенки с обеих сторон вплотную к полке, глубина — где стенка только одна (задняя);
+    // «длинная сторона = ширина» ошибалась у узкого глубокого шкафа (Шкаф 7: полка 464×537, 29.09)
+    const both = a => {
+      const lo = wallBound(P0, a, -1, new Set([i])), hi = wallBound(P0, a, 1, new Set([i]));
+      return !!(lo && hi && cb.min[a] - lo.v < 40 && hi.v - cb.max[a] < 40);
+    };
+    const bx = both('x'), bz = both('z');
+    wAx = bx && !bz ? 'x' : bz && !bx ? 'z' : (cs.x >= cs.z ? 'x' : 'z');
+    dAx = wAx === 'x' ? 'z' : 'x';
+  }
+  else {
+    // вертикальная стенка: напротив (по нормали) есть параллельная стенка — это боковина, иначе — задняя стенка
+    const opp = wallBound(P0, k, sn, new Set([i]));
+    const h2 = k === 'x' ? 'z' : 'x';
+    if (opp && Math.abs(opp.v - P0[k]) < 2500) { wAx = k; dAx = h2; } else { dAx = k; wAx = h2; }
+  }
+  // высота и ширина — до стенок
+  const skipMe = new Set([i]);
+  const yLo = k === 'y' && sn > 0 ? { v: P[k], j: i } : wallBound(P0, 'y', -1, skipMe);
+  const yHi = k === 'y' && sn < 0 ? { v: P[k], j: i } : wallBound(P0, 'y', 1, skipMe);
+  const wLo = k === wAx && sn > 0 ? { v: P[k], j: i } : wallBound(P0, wAx, -1, skipMe);
+  const wHi = k === wAx && sn < 0 ? { v: P[k], j: i } : wallBound(P0, wAx, 1, skipMe);
+  if (!yLo || !wLo || !wHi) { toast('тут немає комірки: не знайшов стінок навколо'); return; }
+  // глубина: вдоль боковин (или щёлкнутой детали); задняя стенка — внутри этого отрезка, перед — открытый край
+  const sides = [wLo.j, wHi.j].map(j => boxOf(j));
+  let dMin = Math.max(sides[0].min[dAx], sides[1].min[dAx]), dMax = Math.min(sides[0].max[dAx], sides[1].max[dAx]);
+  if (!(dMax - dMin > 50)) { dMin = cb.min[dAx]; dMax = cb.max[dAx]; }
+  const Pm = P0.clone(); Pm[dAx] = (dMin + dMax) / 2;
+  const bLo = wallBound(Pm, dAx, -1, skipMe), bHi = wallBound(Pm, dAx, 1, skipMe);
+  const inLo = bLo && bLo.v >= dMin - 1, inHi = bHi && bHi.v <= dMax + 1;
+  let back, front, fs;
+  if (k === dAx) { back = P[k]; fs = sn; front = sn > 0 ? dMax : dMin; }
+  else if (inLo && !inHi) { back = bLo.v; front = dMax; fs = 1; }
+  else if (inHi && !inLo) { back = bHi.v; front = dMin; fs = -1; }
+  else { // обе или ни одной — задняя та, что ближе к краю отрезка
+    const lo = inLo ? bLo.v : dMin, hi = inHi ? bHi.v : dMax;
+    if (Math.abs(lo - dMin) <= Math.abs(dMax - hi)) { back = lo; front = dMax; fs = 1; } else { back = hi; front = dMin; fs = -1; }
+  }
+  const y0 = yLo.v, y1 = yHi ? yHi.v : null, w0 = wLo.v, w1 = wHi.v;
+  const d0 = Math.min(back, front), d1 = Math.max(back, front);
+  // препятствия внутри ячейки (при закрытых ящиках): всё, что не стенка, не дверь, не мелкий крепёж
+  const C = { min: { y: y0 + 2, [wAx]: w0 + 2, [dAx]: d0 + 2 }, max: { y: (y1 ?? y0 + 3000) - 2, [wAx]: w1 - 2, [dAx]: d1 - 2 } };
+  const inside = [];
+  parts.forEach((p, j) => {
+    if (j === i || isWall(j) || p.isDoor || p.isL || isHardwareSmall(j)) return;
+    const b = boxOf(j);
+    if (b.max.y <= C.min.y || b.min.y >= C.max.y || b.max[wAx] <= C.min[wAx] || b.min[wAx] >= C.max[wAx] || b.max[dAx] <= C.min[dAx] || b.min[dAx] >= C.max[dAx]) return;
+    inside.push({ j, b });
+  });
+  // что стоит на дне (зазор до 50 мм — ящик на направляющих, корзина) — занятое место: высоту мерим от его верха
+  let base = y0;
+  for (let grow = true; grow;) {   // стопка ящиков: поднимаемся, пока следующий стоит вплотную к предыдущему
+    grow = false;
+    for (const o of inside) if (!isTube(o.j) && o.b.min.y <= base + 50 && o.b.max.y > base + 0.5) { base = o.b.max.y; grow = true; }
+  }
+  let obst = null, tube = null;
+  for (const o of inside) {
+    if (o.b.min.y <= base + 5) continue;
+    if (isTube(o.j)) { if (!tube || o.b.min.y < tube.min.y) tube = o.b; continue; }
+    if (!obst || o.b.min.y < obst.min.y) obst = o.b;
+  }
+  const H = (y1 ?? y0 + 1000) - y0, W = w1 - w0;
+  const pt = (w, y, d) => { const q = { y }; q[wAx] = w; q[dAx] = d; return toWorld(vec(q)); };
+  const dF = front - fs * 30;                                  // линии — у переднего края, внутри
+  const topY = obst && (!tube || obst.min.y < tube.min.y) ? obst.min.y : y1;
+  // креслення: проём целиком, от полки до полки (на ручных листах 050 — так, штанга не в счёт)
+  if (easyCollect && y1 != null) easyDim(pt(w0 + 0.15 * W, y0, dF), pt(w0 + 0.15 * W, y1, dF), 'проріз');
+  easyDim(pt(w0, y0 + Math.min(0.25 * H, 250), dF), pt(w1, y0 + Math.min(0.25 * H, 250), dF), 'ширина');
+  easyDim(pt(w0 + 0.5 * W, y0 + 0.12 * H, back), pt(w0 + 0.5 * W, y0 + 0.12 * H, front), 'глибина');
+  if (tube && (!obst || tube.min.y < obst.min.y)) {
+    const wt = w0 + 0.3 * W;
+    // штанга: от полки/дна под ней — какой длины вещь повесить; от пола (низ ножек) — достанет ли человек (29.09)
+    easyDim(pt(wt, base, dF), pt(wt, tube.max.y, dF), 'до штанги');
+    easyDim(pt(w0 + 0.6 * W, floorY(), dF), pt(w0 + 0.6 * W, tube.max.y, dF), 'штанга від підлоги');
+  } else if (topY != null) {
+    // над тем, что стоит на дне, почти пусто (ящик под полкой) — показываем нишу целиком, от дна
+    const from = topY - base < 50 ? y0 : base;
+    easyDim(pt(w0 + 0.15 * W, from, dF), pt(w0 + 0.15 * W, topY, dF), 'висота');
+  }
+}
+// пол — низ ножек: самая нижняя точка изделия (отрезки помещения не в счёт)
+let FLOOR = null;
+function floorY() {
+  if (FLOOR === null) { FLOOR = Infinity; parts.forEach((p, j) => { if (!p.isL) FLOOR = Math.min(FLOOR, boxOf(j).min.y); }); }
+  return FLOOR;
+}
+// щелчок по самой штанге: от полки/дна под ней до верха штанги и от пола до верха штанги
+function tubeDims(i) {
+  const b = boxOf(i), c = b.getCenter(new THREE.Vector3());
+  const lo = wallBound(new THREE.Vector3(c.x, b.min.y - 1, c.z), 'y', -1);
+  const s = b.getSize(new THREE.Vector3()), along = s.x >= s.z ? 'x' : 'z';
+  const at = (f, y) => { const q = c.clone(); q[along] = b.min[along] + f * s[along]; q.y = y; return toWorld(q); };
+  if (lo) easyDim(at(0.3, lo.v), at(0.3, b.max.y), 'до штанги');
+  easyDim(at(0.6, floorY()), at(0.6, b.max.y), 'штанга від підлоги');
+}
+// части подвижной системы (ящик + его направляющие) — как при открывании касанием
+function scopeOf(i) {
+  const ch = parts[i].chainA, top = ch[0], h = parts[i].h;
+  const pIdx = h.indexOf(top) + 1, P = pIdx < h.length ? h[pIdx] : null;
+  if (P !== null && (!M.ntype || M.ntype[P] !== 'layer') && partsUnder(P).length <= 2.5 * partsUnder(top).length) return P;
+  return top;
+}
+// ящик: всё считается в закрытом положении (в координатах модели), показывается на открытом
+function drawerDims(i) {
+  const top = parts[i].chainA[0], nd = animNode[top];
+  // детали фасада ящика (блоки типа «фасад»/«фронт», метка двери) в коробку не берём: кромка рамочного фасада
+  // оказывалась «самой нижней плоской» и считалась дном — «корисна висота 12» (050_8, 29.09)
+  const inFac = j => parts[j].isDoor || chainFt(j).some(t => t === 'фасад' || t === 'фронт');
+  const all = partsUnder(top).filter(j => !parts[j].isF && !parts[j].isL && !parts[j].isB);
+  const own = all.filter(j => !inFac(j));
+  if (own.length < 3) return null;
+  const v = nd.a.clone().multiplyScalar(Math.sign(nd.d) || 1);          // куда выезжает
+  const kD = Math.abs(v.x) >= Math.abs(v.z) ? 'x' : 'z', kW = kD === 'x' ? 'z' : 'x', s = Math.sign(v[kD]) || 1;
+  const bx = own.map(j => ({ j, b: geomBox(j) }));
+  bx.forEach(o => { o.s = o.b.getSize(new THREE.Vector3()); o.u0 = Math.min(s * o.b.min[kD], s * o.b.max[kD]); o.u1 = Math.max(s * o.b.min[kD], s * o.b.max[kD]); });
+  // фасад уже отброшен по типу; если типов нет (старая выгрузка) — отбрасываем самую переднюю деталь, как раньше
+  const hasFt = !!M.nft && all.length > own.length;
+  const fac = bx.reduce((p, q) => q.u1 > p.u1 ? q : p);
+  const rest = hasFt ? bx : bx.filter(o => o !== fac);
+  const thin = (o, k) => o.s[k] <= Math.min(o.s.x, o.s.y, o.s.z) + 0.01;
+  // дно — самая большая горизонтальная панель, а не самая нижняя
+  const bottoms = rest.filter(o => thin(o, 'y')).sort((p, q) => q.s.x * q.s.z - p.s.x * p.s.z);
+  const sides = rest.filter(o => thin(o, kW)).sort((p, q) => (p.b.min[kW] + p.b.max[kW]) - (q.b.min[kW] + q.b.max[kW]));
+  const walls = rest.filter(o => thin(o, kD)).sort((p, q) => (p.u0 + p.u1) - (q.u0 + q.u1));
+  if (!bottoms.length || sides.length < 2 || !walls.length) return null;
+  const bot = bottoms[0], y0 = bot.b.max.y;
+  const w0 = sides[0].b.max[kW], w1 = sides[sides.length - 1].b.min[kW];
+  const uB = walls[0].u1, uF = walls.length > 1 ? walls[walls.length - 1].u0 : hasFt ? fac.u1 : fac.u0;
+  // что нависает над ящиком (над его коробкой с фасадом), в закрытом положении; свою систему не считаем
+  const mine = new Set(partsUnder(scopeOf(i)));
+  const fp = new THREE.Box3(); for (const o of bx) fp.union(o.b);  let yTop = Infinity;
+  parts.forEach((pr, j) => {
+    if (mine.has(j) || pr.isL || !pr.g.visible) return;
+    const b = geomBox(j);
+    if (b.max[kW] <= fp.min[kW] + 1 || b.min[kW] >= fp.max[kW] - 1 || b.max[kD] <= fp.min[kD] + 1 || b.min[kD] >= fp.max[kD] - 1) return;
+    if (b.min.y >= y0 + 5 && b.min.y < yTop) yTop = b.min.y;
+  });
+  const P = (w, u, y) => { const o = { y }; o[kW] = w; o[kD] = u * s; return vec(o); };
+  const wm = Math.min(w0, w1) + 15, uf = uF - 15, ub = uB + 15, ym = y0 + 1;
+  const out = [
+    [P(Math.min(w0, w1), uf, ym), P(Math.max(w0, w1), uf, ym), 'ширина', null],
+    [P(wm, uB, ym), P(wm, uF, ym), 'глибина', null],
+  ];
+  // полезная высота = до того, что над ящиком, минус 6 мм; линия — ровно под число (замечание 29.09)
+  if (isFinite(yTop)) out.push([P(wm, ub, y0), P(wm, ub, yTop - 6), 'корисна висота', String(Math.round(yTop - y0 - 6))]);
+  return { g: parts[bot.j].g, out };
+}
+let easyTimer = null;
+// закрыть то, что открыли лёгкие размеры (кроме звеньев из keep), и отменить отложенные размеры
+function closeEasyOpen(keep) {
+  clearTimeout(easyTimer);
+  const K = keep instanceof Set ? keep : new Set(keep !== undefined ? [keep] : []), rest = [];
+  for (const j of easyOpen) {
+    const t = parts[j].chainA[0];
+    if (K.has(t)) { rest.push(j); continue; }
+    if (openTarget(t)) toggleAt(j, 0);
+  }
+  easyOpen = rest;
+}
+// подвижные детали, которые в ЗАКРЫТОМ положении стоят на луче щелчка перед попаданием (дверь перед ящиком):
+// по одной детали на звено. Луч — от последнего pick (05.10: щелчок по ящику за дверью закрывал дверь)
+function doorsInFront(i, h) {
+  const own = parts[i].chainA[0], seen = new Map(), v = new THREE.Vector3();
+  root.updateMatrixWorld(true);
+  for (const pr of moving) {
+    if (pr.kind !== 'p') continue;
+    const t0 = pr.chainA[0];
+    if (t0 === own || seen.has(t0) || parts[i].chainA.includes(t0)) continue;
+    const b = panelBox(pr, poseOf(pr, () => 0)).applyMatrix4(root.matrixWorld);
+    if (ray.ray.intersectBox(b, v) && ray.ray.origin.distanceTo(v) < h.distance - 0.5) seen.set(t0, pr.i);
+  }
+  return [...seen.values()];
+}
+// открыть деталь i вместе с дверьми перед ней: сначала двери, ящик — когда они отойдут
+function openWithFront(i, front) {
+  const doors = front.filter(j => !openTarget(parts[j].chainA[0]));
+  if (!doors.length) { if (!openTarget(parts[i].chainA[0])) toggleAt(i, 1); else lastOpenDelay = 0; return; }
+  let delay = 0;
+  for (const j of doors) { toggleAt(j, 1); delay = Math.max(delay, lastOpenDelay); }
+  delay += 600;
+  const list = [...scopeIds(i)];
+  for (const id of list) pendingOpen.add(id);
+  setTimeout(() => { for (const id of list) pendingOpen.delete(id); startAnim(list, 1); }, delay);
+  lastOpenDelay = delay;
+}
+let easySeq = 0;
+function easyMoving(i, cx, cy, front = []) {
+  const top = parts[i].chainA[0], nd = animNode[top];
+  // креслення: ничего не открываем — ящик меряется закрытым, на своём месте; двери — спрятать фасады
+  if (drawOn) {
+    if (!(Math.abs(nd.ang) < 1e-3 && Math.abs(nd.d) > 0)) { toast('у кресленні двері не відкриваються — сховайте фасади'); return; }
+    let dd = drawerDims(i);
+    if (!dd) { const S = scopeIds(i); for (const pr of moving) if (pr.chainA[0] !== top && S.has(pr.chainA[0]) && pr.kind === 'p') { dd = drawerDims(pr.i); if (dd) break; } }
+    if (!dd) { toast('не розібрав шухляду'); return; }
+    root.updateMatrixWorld(true);
+    for (const [a, b, l, t] of dd.out) easyDim(a.applyMatrix4(dd.g.matrixWorld), b.applyMatrix4(dd.g.matrixWorld), l, t);
+    return;
+  }
+  const keep = new Set([top, ...front.map(j => parts[j].chainA[0])]);      // дверь перед ящиком не закрываем
+  // повторное касание открытого ЛЁГКИМИ размерами — закрыть; открытое иначе («відкрити все», касание) — размеры (05.10)
+  if (openTarget(top) && easyOpen.some(j => parts[j].chainA[0] === top)) {
+    clearTimeout(easyTimer); toggleAt(i, 0); easyOpen = easyOpen.filter(j => parts[j].chainA[0] !== top); return;   // дверь перед ним остаётся
+  }
+  closeEasyOpen(keep);
+  const isDrawer = Math.abs(nd.ang) < 1e-3 && Math.abs(nd.d) > 0;
+  let dd = isDrawer ? drawerDims(i) : null;
+  // щёлкнули по направляющей (едет вместе с ящиком) — размеры берём у ящика той же системы (29.09, Шкаф 8)
+  if (isDrawer && !dd) {
+    const S = scopeIds(i);
+    for (const pr of moving) if (pr.chainA[0] !== top && S.has(pr.chainA[0]) && pr.kind === 'p') { dd = drawerDims(pr.i); if (dd) break; }
+  }
+  openWithFront(i, front);
+  for (const j of [...front, i]) if (!easyOpen.some(q => parts[q].chainA[0] === parts[j].chainA[0])) easyOpen.push(j);
+  const mark = ++easySeq;
+  const fire = n => {                                                       // после остановки
+    if (easySeq !== mark || !openTarget(top) || !ruler || rmode !== 'easy') return;
+    // ещё едет (тяжёлая модель, медленные кадры) — подождать, иначе размеры встанут посреди хода,
+    // а щелчок за дверью попадёт в саму дверь (05.10)
+    if (n < 15 && (pendingOpen.has(top) || anims.some(a => a.ids.includes(top)))) { easyTimer = setTimeout(() => fire(n + 1), 200); return; }
+    root.updateMatrixWorld(true);
+    if (dd) { for (const [a, b, l, t] of dd.out) easyDim(a.applyMatrix4(dd.g.matrixWorld), b.applyMatrix4(dd.g.matrixWorld), l, t); return; }
+    // дверь (в том числе раздвижная — она тоже едет прямо, но дна и боковин у неё нет): ячейка за ней
+    const h = pickSolid(cx, cy); if (!h || !h.face) return;
+    const pr = parts[h.object.userData.idx]; if (pr.chainA.length) return;
+    easyStatic(h);
+  };
+  easyTimer = setTimeout(() => fire(0), 980 + lastOpenDelay);
+}
+function easyStatic(h) {
+  const i = h.object.userData.idx, pr = parts[i];
+  const n = h.face.normal.clone().applyMatrix3(new THREE.Matrix3().getNormalMatrix(h.object.matrixWorld)).normalize();
+  const k = mainAxis(n), s = geomBox(i).getSize(new THREE.Vector3());
+  if (isTube(i)) { tubeDims(i); return; }
+  // кромка: грань смотрит вдоль большого размера детали (не вдоль толщины) — размеры детали
+  if (pr.isF || pr.isB || s[k] > Math.min(s.x, s.y, s.z) + 0.01) { if (!easyCollect) showPartDims(i); return; }
+  easyCell(h.point, n, i);
+}
+function easyPick(x, y) {
+  if (drawOn) dropPartDims(); else dropEasy();               // в кресленні размеры ячеек копятся — лист собирается из многих
+  const h = pickSolid(x, y);                                 // стекло пропускаем: ящик за стеклянной дверью (05.10)
+  if (!h || !h.face) { closeEasyOpen(); return; }
+  const i = h.object.userData.idx; if (parts[i].isL) { closeEasyOpen(); return; }
+  const front = doorsInFront(i, h);
+  if (parts[i].chainA.length) { easyMoving(i, x, y, front); return; }
+  // щелчок мимо открытого ящика/двери — закрыть его (замечание 29.09), кроме двери, за которой щёлкнули;
+  // размеры считаем уже по тому, что щёлкнули
+  closeEasyOpen(new Set(front.map(j => parts[j].chainA[0])));
+  easyStatic(h);
+}
+
+const RHINT = { easy: 'легкі розміри: торкніться полиці, стінки, дверцят або шухляди', face: 'рулетка: торкніться грані деталі', edge: 'рулетка: торкніться ребра деталі', point: 'рулетка: вкажіть першу точку',
+  wall: WHINT,
+  gab: matchMedia('(pointer: coarse)').matches ? 'габарит: торкніться деталі; ще раз — збірна одиниця, далі — вища'
+    : 'габарит: виділіть деталь; Tab — вище, Shift+Tab — нижче, Ctrl — додати деталь, Shift — збірна одиниця (ще раз — вища)' };
+function setRMode(m) {
+  rmode = m; try { localStorage.setItem('viewerRMode2', m); } catch (e) {}
+  rp = []; clearFace1(); faceHoverEnd(); clearEdge1(); edgeHoverEnd(); clearWall1(); wallHoverEnd(); hideHover(); dropEasy();
+  $('st').textContent = RHINT[m];
+  if (m === 'wall') {                                      // мерить не до чего, если линии помещения спрятаны или их нет
+    if (!showL) { showL = true; applyVis(); renderTree(); }
+    if (!parts.some(p => p.isL)) toast('у моделі немає ліній приміщення — міряти немає до чого');
+  }
+  syncTools();
+  if (ruler) cv.style.cursor = m === 'gab' ? '' : 'none';
+  if (m === 'gab') gabShow();
+}
+// выбор под пальцем/курсором по текущему способу
+function rulerPick(x, y, mouse) {
+  if (rmode === 'gab') { const h = pick(x, y); if (h) tapPick(h.object.userData.idx); else clearSel(); return; }   // только телефон
+  if (rmode === 'easy') { easyPick(x, y); return; }
+  if (rmode === 'face') { faceHoverEnd(); faceClick(faceAt(x, y), mouse); }
+  else if (rmode === 'edge') { edgeHoverEnd(); edgeClick(edgeAt(x, y), mouse); }
+  else if (rmode === 'wall') { wallHoverEnd(); wallClick(wallAt(x, y), mouse); }
+  else { const p = snapAt(x, y); if (!p) toast('точку не поставлено: поруч немає кута деталі'); else addPoint(p, mouse); }
+}
+// ---------------- размеры ----------------
+// Две точки вдоль ширины, высоты или глубины → размер с выносными «лапками», его можно оттащить:
+// точки на месте, линия с числом уезжает (вверх-вниз — читается спереди, к себе-от себя — сверху).
+// Точки наискосок (отличаются больше чем по одному направлению) → прямая линия с числом, без лапок.
+// Размеры остаются на модели; удалить — правой кнопкой по числу (на телефоне — подержать палец на числе).
+// цвет размеров — тёмно-синий: «ядовито-красный» не понравился (29.09)
+const DIMC = 0x1f5fbf, AX = { x: new THREE.Vector3(1, 0, 0), y: new THREE.Vector3(0, 1, 0), z: new THREE.Vector3(0, 0, 1) };
+const dims = [];
+const fmt = x => String(Math.round(Math.abs(x) * 10) / 10).replace('.', ',');
+function axisOf(a, b) {
+  const d = b.clone().sub(a), big = ['x', 'y', 'z'].filter(k => Math.abs(d[k]) > 0.5);
+  return big.length === 1 ? big[0] : null;
+}
+function lineMat() { return new THREE.LineBasicMaterial({ color: DIMC, depthTest: false }); }
+function buildDim(dm) {
+  if (dm.g) scene.remove(dm.g);
+  const g = new THREE.Group(); g.renderOrder = 10;
+  const seg = pts => { const l = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts), lineMat()); l.renderOrder = 10; g.add(l); };
+  if (!dm.axis) { seg([dm.a, dm.b]); dm.mid = dm.a.clone().add(dm.b).multiplyScalar(0.5); }
+  else {
+    // размерная линия — вдоль оси от смещённой первой точки; лапки идут поперёк оси от обеих точек
+    // (для размера «по ширине/высоте/глубине» из косого лапки получаются разной длины — как в чертеже)
+    const u0 = AX[dm.axis], tlen = dm.b.clone().sub(dm.a).dot(u0);
+    const a2 = dm.a.clone().add(dm.off), b2 = a2.clone().addScaledVector(u0, tlen);
+    const pts = [a2, b2];
+    const ext = (p, q) => { const d = q.clone().sub(p); if (d.lengthSq() > 1) pts.push(p, q.clone().addScaledVector(d.normalize(), 8)); };
+    ext(dm.a, a2); ext(dm.b, b2);
+    // стрелки на концах, остриём в выносную линию (29.09: вместо косых засечек)
+    const L = Math.max(10, Math.min(45, Math.abs(tlen) * 0.04));
+    const u = AX[dm.axis].clone().multiplyScalar(Math.sign(tlen) || 1);
+    const w = dm.off.lengthSq() > 1 ? dm.off.clone().normalize() : new THREE.Vector3().crossVectors(u, cam.getWorldDirection(new THREE.Vector3())).normalize();
+    for (const [p, s] of [[a2, 1], [b2, -1]]) {
+      const back = p.clone().addScaledVector(u, s * L);
+      pts.push(p, back.clone().addScaledVector(w, L * 0.3), p, back.clone().addScaledVector(w, -L * 0.3));
+    }
+    seg(pts);
+    dm.mid = a2.clone().add(b2).multiplyScalar(0.5);
+  }
+  dm.g = g; g.visible = dimsShown && !drawOn; scene.add(g);   // в кресленні размеры рисует лист (по правилам чертежа)
+  // лёгкие размеры подписаны словом («ширина 564»), у ящика число — расчётное («корисна висота 187»)
+  dm.el.textContent = (dm.label ? dm.label + ' ' : '') + (dm.text != null ? dm.text : fmt(dm.axis ? dm.b.clone().sub(dm.a).dot(AX[dm.axis]) : dm.a.distanceTo(dm.b)));
+}
+// косой размер: щелчок по числу — перевести в размер по одной оси
+function axisMenu(dm) {
+  closeAxisMenu();
+  const m = document.createElement('div'); m.id = 'axmenu';
+  const r = dm.el.getBoundingClientRect();
+  m.style.left = r.left + 'px'; m.style.top = (r.bottom + 4) + 'px';
+  const dv = dm.b.clone().sub(dm.a);
+  for (const [k, t] of [['x', 'по ширині'], ['y', 'по висоті'], ['z', 'по глибині']]) {
+    if (Math.abs(dv[k]) < 0.5) continue;
+    const b = document.createElement('button'); b.textContent = t + ' ' + fmt(dv[k]);
+    b.onclick = e => { e.stopPropagation(); dm.axis = k; dm.off.set(0, 0, 0); buildDim(dm); updRuler(); closeAxisMenu(); need();
+      $('st').textContent = 'розмір ' + t + ' — потягніть число, щоб відсунути'; };
+    m.appendChild(b);
+  }
+  document.body.appendChild(m);
+  setTimeout(() => addEventListener('pointerdown', closeAxisMenu, { once: true }), 0);
+}
+function closeAxisMenu() { const m = $('axmenu'); if (m) m.remove(); }
+// кнопка «размеры»: короткое нажатие — спрятать/показать, долгое (или правой кнопкой) — удалить все
+let dimsShown = true;
+function syncDimBtn() {
+  const b = $('bDims'); if (!b) return;
+  b.style.display = 'none';          // кнопка «размеры» внизу убрана (29.09): прячет/показывает рулетка, стереть — значок справа вверху
+  b.classList.toggle('on', dimsShown);
+  syncTools();                                             // значок «стереть все размеры»
+}
+function setDimsShown(on) {
+  dimsShown = on;
+  for (const dm of dims) dm.g.visible = on && !drawOn;
+  updRuler(); syncDimBtn(); need();
+}
+function addDim(a, b, opt) {
+  const dm = Object.assign({ a, b, axis: axisOf(a, b), off: new THREE.Vector3(), el: document.createElement('div') }, opt || {});
+  dm.el.className = 'dim';
+  if (drawOn && !dm.vdir) dm.vdir = viewDir();             // в кресленні размер принадлежит виду, на котором поставлен
+  if (drawOn && dm.fs === undefined) dm.fs = hideFac;      // …и листу с фасадами / без фасадов
+  document.body.appendChild(dm.el);
+  dims.push(dm); if (!dimsShown) setDimsShown(true); buildDim(dm); hookDim(dm); updRuler(); syncDimBtn(); need();
+  const dv = b.clone().sub(a);
+  $('st').textContent = dm.axis ? 'розмір ' + fmt(a.distanceTo(b)) + ' мм — потягніть число, щоб відсунути'
+    : 'по прямій ' + fmt(a.distanceTo(b)) + ' мм  (ширина ' + fmt(dv.x) + ', висота ' + fmt(dv.y) + ', глибина ' + fmt(dv.z) + ')';
+  return dm;
+}
+function removeDim(dm) { if (dm === selDim) selDim = null; scene.remove(dm.g); dm.el.remove(); dims.splice(dims.indexOf(dm), 1); syncDimBtn(); need(); }
+// оттаскивание: смещение — по одной из двух осей поперёк размера, какая лучше совпадает с движением
+function dragDim(dm, cx, cy, sdx, sdy) {
+  if (!dm.axis) return;
+  const ndc = new THREE.Vector2((cx / innerWidth) * 2 - 1, -(cy / innerHeight) * 2 + 1);
+  const rc = new THREE.Raycaster(); rc.setFromCamera(ndc, cam);
+  const others = ['x', 'y', 'z'].filter(k => k !== dm.axis);
+  // экранное направление каждой оси-кандидата
+  const base = dm.mid.clone().project(cam);
+  let best = null, bestScore = -1;
+  for (const c of others) {
+    const q = dm.mid.clone().add(AX[c].clone().multiplyScalar(100)).project(cam);
+    const vx = (q.x - base.x) * innerWidth / 2, vy = -(q.y - base.y) * innerHeight / 2, vl = Math.hypot(vx, vy) || 1;
+    const score = Math.abs((vx * sdx + vy * sdy) / vl);
+    if (score > bestScore) { bestScore = score; best = c; }
+  }
+  const third = others.find(k => k !== best);
+  const pl = new THREE.Plane().setFromNormalAndCoplanarPoint(AX[third], dm.a);
+  const P = rc.ray.intersectPlane(pl, new THREE.Vector3());
+  if (!P) return;
+  dm.off = AX[best].clone().multiplyScalar(P.clone().sub(dm.a).dot(AX[best]));
+  buildDim(dm); updRuler(); need();
+}
+function hookDim(dm) {
+  let st = null, lp = null;
+  dm.el.addEventListener('pointerdown', e => {
+    e.preventDefault(); e.stopPropagation();
+    try { dm.el.setPointerCapture(e.pointerId); } catch (err) {}
+    st = { x: e.clientX, y: e.clientY, moved: false };
+    if (e.button === 2) { removeDim(dm); st = null; return; }
+    if (e.pointerType === 'touch') lp = setTimeout(() => { if (st && !st.moved) { removeDim(dm); st = null; } }, 650);
+  });
+  dm.el.addEventListener('pointermove', e => {
+    if (!st) return;
+    const sdx = e.clientX - st.x, sdy = e.clientY - st.y;
+    if (!st.moved && Math.hypot(sdx, sdy) < 5) return;
+    st.moved = true; clearTimeout(lp);
+    dragDim(dm, e.clientX, e.clientY, sdx, sdy);
+  });
+  const end = e => { const was = st; st = null; clearTimeout(lp); if (was && !was.moved && e.type === 'pointerup' && !dm.axis) axisMenu(dm); };
+  dm.el.addEventListener('pointerup', end); dm.el.addEventListener('pointercancel', end);
+  dm.el.addEventListener('contextmenu', e => e.preventDefault());
+}
+// число размера показываем, только когда середина размера на экране и перед глазом
+// (замечание 27.09: число «висело» у края и на строке кнопок, когда сам размер ушёл за экран)
+function updRuler() {
+  if (drawOn) { for (const dm of dims) dm.el.style.display = 'none'; drawOverlay(); return; }   // в кресленні — числа на листе
+  const fwd = cam.getWorldDirection(new THREE.Vector3());
+  for (const dm of dims) {
+    const s = dm.mid.clone().project(cam);
+    const x = (s.x + 1) / 2 * innerWidth, y = (1 - s.y) / 2 * innerHeight;
+    const front = !cam.isPerspectiveCamera || dm.mid.clone().sub(cam.position).dot(fwd) > 0;
+    const vis = front && s.z < 1 && x >= 0 && x <= innerWidth && y >= 0 && y <= innerHeight;
+    dm.el.style.display = vis && dimsShown ? 'block' : 'none';
+    dm.el.style.left = x + 'px';
+    dm.el.style.top = y + 'px';
+    dm._x = x; dm._y = y; dm._vis = vis && dimsShown;
+  }
+  // подписи не ложатся друг на друга: наехавшую сдвигаем вниз, пока не освободится место (ТЗ 3.5, замечание 29.09)
+  const placed = [];
+  for (const dm of dims) {
+    if (!dm._vis) continue;
+    const w = dm.el.offsetWidth, h = dm.el.offsetHeight;
+    let y = dm._y;
+    for (let t = 0; t < 8; t++) {
+      const hit = placed.find(r => Math.abs(r.x - dm._x) < (r.w + w) / 2 + 2 && Math.abs(r.y - y) < (r.h + h) / 2 + 2);
+      if (!hit) break;
+      y = hit.y + (hit.h + h) / 2 + 3;
+    }
+    if (y !== dm._y) dm.el.style.top = y + 'px';
+    placed.push({ x: dm._x, y, w, h });
+  }
+}
+// первая точка ждёт вторую; вторая — ставит размер
+function addPoint(p, mouse) {
+  if (!p) return;
+  if (!rp.length) { rp = [p]; $('st').textContent = 'рулетка: вкажіть другу точку'; showPending(); return; }
+  const a = rp[0]; rp = []; showPending();
+  if (a.distanceTo(p) < 0.5) { toast('розмір не поставлено: друга точка потрапила в той самий кут, що й перша'); return; }
+  const dm = addDim(a, p);
+  if (mouse && dm.axis) placing = { dm, base: a.clone().add(p).multiplyScalar(0.5) };
+}
+// первая точка и резиновая линия до курсора (на компьютере)
+let pend = null;
+function cancelPoint() { rp = []; clearFace1(); clearEdge1(); clearWall1(); $('st').textContent = RHINT[rmode]; }
+function showPending(hover) {
+  $('bUndo').style.display = ruler && (rp.length || face1 || edge1 || wall1) ? '' : 'none';
+  if (pend) { scene.remove(pend); pend = null; }
+  if (!rp.length) { need(); return; }
+  const pts = [rp[0], hover || rp[0]];
+  const mk = new THREE.Group();
+  // первая точка видна яркой отметкой, пока не поставлена вторая (на телефоне раньше не было видно ничего)
+  const dot = new THREE.Points(new THREE.BufferGeometry().setFromPoints([rp[0]]),
+    new THREE.PointsMaterial({ color: DIMC, size: TOUCH ? 14 : 10, sizeAttenuation: false, depthTest: false }));
+  dot.renderOrder = 11; mk.add(dot);
+  const l = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineDashedMaterial({ color: DIMC, depthTest: false, dashSize: 10, gapSize: 6 }));
+  l.computeLineDistances(); l.renderOrder = 10; mk.add(l);
+  pend = mk; scene.add(pend); need();
+}
+function clearDims() { while (dims.length) removeDim(dims[0]); rp = []; showPending(); }
+function stopRuler() {
+  ruler = false; rp = []; placing = null; dropEasy(); clearFace1(); faceHoverEnd(); clearEdge1(); edgeHoverEnd(); clearWall1(); wallHoverEnd(); showPending(); hideHover(); syncTools();
+  cv.style.cursor = '';
+  setOn('bRuler', false); $('st').textContent = ''; need();
+  // рулетку погасили — размеры спрятаны до следующего включения (29.09); в кресленні размеры — часть листа, остаются
+  if (dims.length && !drawOn) setDimsShown(false);
+}
+// компьютер: крестик всегда на месте курсора; у угла детали прыгает на угол ещё до щелчка.
+// После второго щелчка размер «висит на мыши»: ведёшь — лапки отъезжают, третий щелчок фиксирует.
+let placing = null;
+function hover(cx, cy) {
+  if (rmode === 'gab' && !placing) { hideHover(); cv.style.cursor = ''; return; }   // габарит — обычный курсор, щелчок выделяет
+  const mk = $('snapmk');
+  mk.style.display = 'block';
+  if (placing) {
+    const s = placing.base.clone().project(cam);
+    const bx = (s.x + 1) / 2 * innerWidth, by = (1 - s.y) / 2 * innerHeight;
+    mk.classList.remove('snapped'); mk.style.left = cx + 'px'; mk.style.top = cy + 'px';
+    dragDim(placing.dm, cx, cy, cx - bx, cy - by);
+    $('st').textContent = 'розмір ' + fmt(placing.dm.a.distanceTo(placing.dm.b)) + ' мм — відведіть мишу, клацання фіксує (Esc — без відступу)';
+    return;
+  }
+  if (rmode !== 'point') {                                 // грани/рёбра: крестик на курсоре, под ним подсветка
+    mk.classList.remove('snapped'); mk.style.left = cx + 'px'; mk.style.top = cy + 'px';
+    if (rmode === 'face') faceHover(cx, cy); else if (rmode === 'edge') edgeHover(cx, cy); else if (rmode === 'wall') wallHover(cx, cy);
+    return;
+  }
+  const p = snapAt(cx, cy);
+  let x = cx, y = cy, snapped = false;
+  if (p) {
+    const s = p.clone().project(cam), px = (s.x + 1) / 2 * innerWidth, py = (1 - s.y) / 2 * innerHeight;
+    x = px; y = py; snapped = true;
+  }
+  mk.classList.toggle('snapped', snapped);
+  mk.style.left = x + 'px'; mk.style.top = y + 'px';
+  if (rp.length && p) { showPending(p); $('st').textContent = 'рулетка: ' + fmt(rp[0].distanceTo(p)) + ' мм'; }
+  else if (!rp.length) $('st').textContent = 'рулетка: вкажіть першу точку';
+}
+function finishPlacing() { placing = null; $('st').textContent = RHINT[rmode]; }
+function hideHover() { const mk = $('snapmk'); if (mk) mk.style.display = 'none'; }
+
+// ---------------- мышь ----------------
+const ray = new THREE.Raycaster();
+function pick(cx, cy) {
+  ray.setFromCamera(new THREE.Vector2((cx / innerWidth) * 2 - 1, -(cy / innerHeight) * 2 + 1), cam);
+  const hs = ray.intersectObjects(picks, false);
+  for (const h of hs) { if (cutAway(h.point)) continue; let o = h.object, vis = true; while (o) { if (!o.visible) { vis = false; break; } o = o.parent; } if (vis) return h; }
+  return null;
+}
+// то же, но сквозь стекло (лёгкие размеры: ящик и полки за стеклянной дверью)
+function pickSolid(cx, cy) {
+  ray.setFromCamera(new THREE.Vector2((cx / innerWidth) * 2 - 1, -(cy / innerHeight) * 2 + 1), cam);
+  const hs = ray.intersectObjects(picks, false);
+  for (const h of hs) { if (isGlassMesh(h.object) || cutAway(h.point)) continue; let o = h.object, vis = true; while (o) { if (!o.visible) { vis = false; break; } o = o.parent; } if (vis) return h; }
+  return null;
+}
+const cv = rend.domElement;
+let drag = null, hoverAt = null;
+cv.addEventListener('contextmenu', e => e.preventDefault());
+
+// ---------------- пальцы ----------------
+// один палец — вращение (с докруткой после отпускания), два — приближение щипком и сдвиг,
+// короткое касание — открыть/закрыть дверь или ящик, долгое — выделить деталь и показать карточку
+const touches = new Map();
+let tState = null, spin = null, pressTimer = null;
+function orbit(dx, dy) {
+  view.yaw -= dx * 0.006;
+  const lo = TOUCH ? 0 : -Math.PI / 2;                    // на телефоне снизу не заглянуть
+  view.pitch = Math.max(lo, Math.min(Math.PI / 2, view.pitch + dy * 0.006));
+}
+function panBy(dx, dy) {
+  const k = viewHeight() / innerHeight;
+  const right = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 0);
+  const up = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 1);
+  view.target.addScaledVector(right, -dx * k).addScaledVector(up, dy * k);
+}
+function zoomAt(k, cx, cy) {
+  const nd = Math.max(50, Math.min(rad * 5, view.dist * k));   // ближе 50 мм не подойти (одинаково для любого изделия), дальше 5 габаритов не улететь
+  k = nd / view.dist;
+  const p = onTargetPlane(cx, cy); if (p) view.target.lerp(p, 1 - k);
+  view.dist = nd;
+}
+function twoInfo() {
+  const [a, b] = [...touches.values()];
+  return { d: Math.hypot(a.x - b.x, a.y - b.y), x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+}
+function spinLoop() {
+  if (!spin || touches.size) { spin = null; return; }
+  spin.vx *= 0.92; spin.vy *= 0.92;
+  if (Math.abs(spin.vx) + Math.abs(spin.vy) < 0.3) { spin = null; return; }
+  orbit(spin.vx, spin.vy); place();
+  requestAnimationFrame(spinLoop);
+}
+// ---------------- рулетка под палец: лупа ----------------
+// Одним пальцем в режиме рулетки модель не вращается: ведём палец, над ним круг с увеличенной картинкой
+// и отметкой точки (с прилипанием к углу), отпустили — точка поставлена. Два пальца — как обычно.
+const loupe = $('loupe'), lctx = loupe.getContext('2d');
+let aim = null;
+function aimAt(x, y) {
+  aim = rmode === 'face' ? { x, y, kind: 'face', f: faceHover(x, y) }
+      : rmode === 'edge' ? { x, y, kind: 'edge', e: edgeHover(x, y) }
+      : rmode === 'wall' ? { x, y, kind: 'wall', w: wallHover(x, y) } : { x, y, p: snapAt(x, y) };
+  rend.render(scene, cam);                                  // свежий кадр — сразу копируем из него кусок
+  // круг 120 точек экрана (внутри 240 — для чёткости), увеличение 2,5
+  const cw = rend.domElement.width / innerWidth, Z = 2.5, S = loupe.width, C = 120, k = S / C;
+  const src = C / Z * cw;
+  lctx.save(); lctx.clearRect(0, 0, S, S);
+  lctx.beginPath(); lctx.arc(S / 2, S / 2, S / 2 - 2, 0, Math.PI * 2); lctx.clip();
+  lctx.fillStyle = '#eef2f6'; lctx.fillRect(0, 0, S, S);
+  lctx.drawImage(rend.domElement, x * cw - src / 2, y * cw - src / 2, src, src, 0, 0, S, S);
+  // точка, к которой прилипло (или сам палец)
+  let mx = S / 2, my = S / 2;
+  if (aim.p) { const s = aim.p.clone().project(cam); mx = S / 2 + (((s.x + 1) / 2 * innerWidth) - x) * Z * k; my = S / 2 + (((1 - s.y) / 2 * innerHeight) - y) * Z * k; }
+  lctx.strokeStyle = '#1f5fbf'; lctx.lineWidth = 2;
+  lctx.beginPath(); lctx.moveTo(mx - 14, my); lctx.lineTo(mx + 14, my); lctx.moveTo(mx, my - 14); lctx.lineTo(mx, my + 14); lctx.stroke();
+  lctx.restore();
+  lctx.strokeStyle = '#2b2f36'; lctx.lineWidth = 3; lctx.beginPath(); lctx.arc(S / 2, S / 2, S / 2 - 2, 0, Math.PI * 2); lctx.stroke();
+  // лупа вверху слева; палец зашёл в этот угол — перескакивает вправо
+  // (над пальцем у верхнего края экрана она пряталась под палец — замечание 27.09)
+  const L = 120, G = 10, sf = safe(), top = G + sf.t, zone = L + 2 * G + 40;
+  const right = x < zone + sf.l && y < top + zone;
+  loupe.style.display = 'block';
+  loupe.style.left = (right ? innerWidth - L - G - sf.r : G + sf.l) + 'px';
+  loupe.style.top = top + 'px';
+}
+// верхний край строки значков внизу — до него доходят структура и язычок
+function barTop() { return (drawOn ? $('dstat') : $('bar')).getBoundingClientRect().top; }   // креслення: строка-подсказка внизу
+function ribBottom() { return drawOn ? $('drib').getBoundingClientRect().bottom : 0; }
+function isLand() { return innerWidth > innerHeight; }
+// отпустили палец: точка ставится; не поставилась — сказать почему (замечание 27.09: «ставятся не всегда»)
+function aimEnd(place, cancelled) {
+  loupe.style.display = 'none';
+  const a = aim; aim = null; faceHoverEnd(); edgeHoverEnd(); wallHoverEnd();
+  if (cancelled) toast('не поставлено: телефон перервав дотик — спробуйте ще раз, трохи далі від краю екрана');
+  else if (place && a && a.kind === 'face') faceClick(a.f);
+  else if (place && a && a.kind === 'wall') wallClick(a.w);
+  else if (place && a && a.kind === 'edge') edgeClick(a.e);
+  else if (place && a && !a.p) toast('точку не поставлено: поруч із пальцем немає кута деталі');
+  else if (place && a) addPoint(a.p);
+  need();
+}
+let toastT = null;
+function toast(text) {
+  const t = $('toast'); t.textContent = text; t.classList.add('show');
+  clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 3500);
+}
+
+function touchDown(e) {
+  try { cv.setPointerCapture(e.pointerId); } catch (err) {}
+  touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  spin = null; clearTimeout(pressTimer);
+  if (aim) aimEnd(false);                                  // второй палец — отмена прицела, дальше щипок
+  if (touches.size === 1) {
+    tState = { one: true, x0: e.clientX, y0: e.clientY, t0: performance.now(), moved: false, vx: 0, vy: 0, long: false };
+    // С рулеткой (замечание 27.09: «выбрал грань — не могу развернуть»): палец повёл — модель вращается,
+    // короткое касание — выбор грани/ребра/точки, подержал на месте — лупа для точного прицела.
+    if (ruler) {
+      if (rmode === 'easy' || rmode === 'gab') return;     // лёгким размерам и габариту лупа не нужна — касание и есть выбор
+      pressTimer = setTimeout(() => {
+        if (!tState || tState.moved || touches.size !== 1) return;
+        tState = { aim: true }; aimAt(e.clientX, e.clientY);
+      }, 350);
+      return;
+    }
+    pressTimer = setTimeout(() => {                        // долгое нажатие — выделить (повторное — шкаф)
+      if (!tState || tState.moved || touches.size !== 1) return;
+      tState.long = true;
+      const h = pick(tState.x0, tState.y0);
+      if (h) tapPick(h.object.userData.idx); else clearSel();
+    }, 550);
+  } else if (touches.size === 2) {
+    tState = { one: false, ...twoInfo() };
+  }
+}
+function touchMove(e) {
+  const p = touches.get(e.pointerId); if (!p) return;
+  const dx = e.clientX - p.x, dy = e.clientY - p.y;
+  p.x = e.clientX; p.y = e.clientY;
+  if (!tState) return;
+  if (tState.aim) { aimAt(e.clientX, e.clientY); return; }
+  if (tState.one && touches.size === 1) {
+    if (Math.hypot(e.clientX - tState.x0, e.clientY - tState.y0) > 8) tState.moved = true;   // мёртвая зона дрожания
+    if (!tState.moved) return;
+    if (view.strict) { panBy(dx, dy); place(); return; }
+    orbit(dx, dy); tState.vx = dx; tState.vy = dy; place();
+  } else if (!tState.one && touches.size === 2) {
+    const n = twoInfo();
+    if (n.d > 10 && tState.d > 10) zoomAt(tState.d / n.d, n.x, n.y);
+    panBy(n.x - tState.x, n.y - tState.y);
+    tState.d = n.d; tState.x = n.x; tState.y = n.y; place();
+  }
+}
+function touchUp(e) {
+  touches.delete(e.pointerId); clearTimeout(pressTimer);
+  if (tState && tState.aim) { tState = null; aimEnd(e.type === 'pointerup', e.type !== 'pointerup'); return; }
+  const s = tState;
+  if (touches.size === 1) { const [q] = [...touches.values()]; tState = { one: true, x0: q.x, y0: q.y, t0: 0, moved: true, vx: 0, vy: 0 }; return; }
+  tState = null;
+  if (!s || !s.one) return;
+  if (s.moved) { if (!view.strict) { spin = { vx: s.vx, vy: s.vy }; requestAnimationFrame(spinLoop); } return; }
+  if (s.long || performance.now() - s.t0 > 500) return;
+  // короткое касание
+  if (ruler) { rulerPick(e.clientX, e.clientY); return; }
+  const h = pick(e.clientX, e.clientY);
+  if (h) { if (!toggleAt(h.object.userData.idx)) tapPick(h.object.userData.idx); }
+  else clearSel();
+}
+
+cv.addEventListener('pointerdown', e => {
+  if (e.pointerType === 'touch') { touchDown(e); return; }
+  try { cv.setPointerCapture(e.pointerId); } catch (err) {}
+  drag = { b: e.button, x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY };
+  // креслення, щелчковая цепочка: нажали на модуль/фасад/проём — это размер, а не сдвиг листа
+  if (drawOn && e.button === 0 && PRESS.has(drawTool)) { const t = pressTarget(e.clientX, e.clientY); if (t) drag.press = { t, ax: null, line: 0 }; }
+  if (e.button === 1) {
+    e.preventDefault();
+    const h = pick(e.clientX, e.clientY);
+    if (h && !toggleAt(h.object.userData.idx)) $('st').textContent = 'ця деталь нерухома';
+  }
+});
+cv.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse') { hideHover(); faceHoverEnd(); edgeHoverEnd(); wallHoverEnd(); } });
+cv.addEventListener('pointercancel', e => { if (e.pointerType === 'touch') touchUp(e); });
+cv.addEventListener('pointermove', e => {
+  if (e.pointerType === 'touch') { touchMove(e); return; }
+  if (!drag) {
+    // курсор показывает, что сделает щелчок: креслення — прицел инструмента / палец над деталью; рулетка — свой крестик;
+    // обычный просмотр — палец над деталью (Алексей 04.10). Поиск — не чаще одного раза за кадр.
+    if (e.pointerType === 'mouse') {
+      const first = !hoverAt; hoverAt = [e.clientX, e.clientY];
+      if (first) requestAnimationFrame(() => {
+        const [x, y] = hoverAt; hoverAt = null;
+        if (drawOn) drawHover(x, y); else if (ruler) hover(x, y); else cv.style.cursor = pick(x, y) ? 'pointer' : '';
+      });
+    }
+    return;
+  }
+  if (drag.press) { pressMove(drag, e.clientX, e.clientY); return; }
+  const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag.x = e.clientX; drag.y = e.clientY;
+  if (drag.b === 0 && drawOn && drawLines) { panBy(dx, dy); place(); cv.style.cursor = 'grabbing'; }   // креслення: лист двигается, не вращается
+  else if (drag.b === 0) {
+    view.yaw -= dx * 0.006;
+    view.pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, view.pitch + dy * 0.006));
+    place();
+  } else if (drag.b === 2) {
+    const k = viewHeight() / innerHeight;
+    const right = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 0);
+    const up = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 1);
+    view.target.addScaledVector(right, -dx * k).addScaledVector(up, dy * k);
+    place();
+    if (drawOn) cv.style.cursor = 'grabbing';
+  }
+});
+cv.addEventListener('pointerup', e => {
+  if (e.pointerType === 'touch') { touchUp(e); return; }
+  const d = drag; drag = null;
+  if (drawOn) cv.style.cursor = snapTool() ? 'none' : 'default';
+  if (d && d.press && drawOn) { pressUp(d); return; }
+  if (!d || Math.abs(e.clientX - d.x0) > 4 || Math.abs(e.clientY - d.y0) > 4) return;
+  // креслення с инструментом: левая — точка, правая — закончить цепочку (габаритный и «без инструмента» — выделение, как обычно)
+  if (drawOn && snapTool()) { if (d.b === 2) endTool(); else if (d.b === 0) toolClick(e.clientX, e.clientY); return; }
+  if (drawOn && d.b === 0 && (selDim || selSec)) { selDim = selSec = null; drawOverlay(); }
+  if (drawOn && PRESS.has(drawTool)) return;                // щелчок мимо модуля/проёма — ничего не выделяем
+  if (d.b === 2) { if (ruler && (rp.length || face1 || edge1 || wall1)) cancelPoint(); return; }   // правая кнопка без сдвига — убрать первую точку
+  if (d.b !== 0) return;
+  if (ruler && rmode !== 'gab') {                           // «габарит» — щелчок выделяет, как без рулетки (с Ctrl)
+    if (placing) { finishPlacing(); return; }
+    rulerPick(e.clientX, e.clientY, true); return;
+  }
+  const h = pick(e.clientX, e.clientY);
+  if (h) {
+    const i = h.object.userData.idx;
+    if (e.shiftKey) shiftPick(i);
+    else if (e.ctrlKey || e.metaKey) toggleOne(i);
+    else selectPart(i, e.altKey ? upLevel(i, -1) : -1);
+  }
+  else if (!(e.ctrlKey || e.metaKey || e.shiftKey)) clearSel();
+});
+cv.addEventListener('wheel', e => {
+  e.preventDefault();
+  let k = e.deltaY > 0 ? 1.12 : 1 / 1.12;
+  if (k < 1 && view.persp) {                               // приближение — к детали под курсором, а не к середине модели
+    const h = pick(e.clientX, e.clientY);
+    if (h && !parts[h.object.userData.idx].isL) {
+      const fwd = cam.getWorldDirection(new THREE.Vector3());
+      const d = h.point.clone().sub(cam.position).dot(fwd);   // глубина детали по направлению взгляда
+      if (d > 0) { view.target.copy(cam.position).addScaledVector(fwd, d); view.dist = d; }
+    }
+    k = Math.min(1, Math.max(50, view.dist * k) / view.dist);   // ближе 50 мм к детали не подойти
+  }
+  const p = onTargetPlane(e.clientX, e.clientY);          // масштаб к курсору
+  if (p) view.target.lerp(p, 1 - k);
+  view.dist *= k; place();
+}, { passive: false });
+addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  if (drawOn) {                                             // креслення: отмена/возврат, удалить размер, Enter, Esc
+    const ctl = e.ctrlKey || e.metaKey;
+    if (ctl && e.code === 'KeyZ') { e.preventDefault(); if (e.shiftKey) drawRedo(); else drawUndo(); return; }
+    if (ctl && e.code === 'KeyY') { e.preventDefault(); drawRedo(); return; }
+    if (e.key === 'Delete' && selDim) { pushUndo(); removeDim(selDim); drawOverlay(); return; }
+    if (e.key === 'Delete' && selSec) { secAct('del', selSec); return; }
+    if (e.key === 'Enter') { if (drawTool === 'gab') gabCommit(); else if (drawTool) endTool(); return; }
+    if (e.key === 'Escape') {
+      if (tpts.length || tAxis !== null || (sd && sd.a) || (sd && sd.sec) || (cd && cd.a)) { endTool(); if (drawTool === 'sect' || drawTool === 'clip') $('st').textContent = L('h_' + drawTool); return; }
+      if (drawTool) { setTool(null); return; }
+      if (selDim || selSec) { selDim = selSec = null; drawOverlay(); return; }
+    }
+  }
+  if (e.key === 'Tab') {
+    e.preventDefault(); if (selIdx < 0) return;
+    selectPart(selIdx, e.shiftKey ? downLevel(selIdx, selLevel) : upLevel(selIdx, selLevel));
+  }
+  if (e.key === 'Delete') hideSel();
+  if (e.key === 'Escape') {
+    if (placing) { placing.dm.off.set(0, 0, 0); buildDim(placing.dm); updRuler(); finishPlacing(); need(); return; }
+    if (ruler && (rp.length || face1 || edge1 || wall1)) { cancelPoint(); return; }
+    stopRuler(); clearSel();
+  }
+});
+addEventListener('resize', () => { rend.setSize(innerWidth, innerHeight); layout(); });
+
+// ---------------- кнопки ----------------
+function mode(m) {
+  if (drawOn) return;                                       // в кресленні материалы свои, показ не переключается
+  curMode = m;
+  for (const p of parts) for (const x of p.meshes) {
+    const mt = x.material, b = mt.userData.base || mt;   // стекло остаётся прозрачным и в обычном режиме
+    // «линии»: детали не рисуются, но закрывают собой то, что за ними (для светлых скрытых линий);
+    // чуть отодвинуты вглубь, чтобы рёбра на их же поверхности считались видимыми
+    mt.colorWrite = m !== 3;
+    mt.polygonOffset = m === 3; mt.polygonOffsetFactor = 1; mt.polygonOffsetUnits = 1;
+    mt.transparent = m === 2 || (m !== 3 && b.transparent);
+    mt.opacity = m === 2 ? Math.min(0.32, b.opacity) : b.opacity;
+    mt.depthWrite = m === 3 || (m !== 2 && b.depthWrite); mt.needsUpdate = true;
+  }
+  for (const l of hidEdges) l.visible = m === 3 && !l.userData.mark;
+  for (const p of parts) if (p.dHid) for (const l of p.dHid) l.visible = m === 3;
+  setIcon('bMode', ['solid', 'ghost', 'wire'][m - 1]);
+  need();
+}
+function setIcon(id, key) { const b = $(id); if (b) b.innerHTML = ICON[key]; }
+
+// ---------------- окошко выбора рядом с кнопкой ----------------
+// Как у рулетки: одна кнопка, нажал — рядом варианты; выбрал — окошко закрылось.
+// Пункт: {icon, label, on, act, keep} — keep: окошко не закрывать (переключатели фурнитуры и т. п.)
+let popFor = null;
+function openPop(btn, items) {
+  const p = $('pop');
+  if (popFor === btn) { closePop(); return; }
+  popFor = btn; p.replaceChildren();
+  for (const it of items) {
+    if (it === '-') { const s = document.createElement('div'); s.className = 'psep'; p.appendChild(s); continue; }
+    const b = document.createElement('button');
+    b.className = it.on ? 'on' : '';
+    b.innerHTML = ICON[it.icon] + '<span></span>'; b.lastChild.textContent = it.label;
+    b.onclick = e => { e.stopPropagation(); it.act(); if (it.keep) { popFor = null; openPop(btn, btn._items()); } else closePop(); };
+    p.appendChild(b);
+  }
+  p.style.display = 'flex';
+  const r = btn.getBoundingClientRect(), w = p.offsetWidth, h = p.offsetHeight;
+  // значки внизу — окошко над своей кнопкой
+  p.style.left = Math.max(6, Math.min(innerWidth - w - 6, r.left + r.width / 2 - w / 2)) + 'px';
+  p.style.top = Math.max(6, r.top - h - 6) + 'px';
+}
+function closePop() { popFor = null; const p = $('pop'); if (p) p.style.display = 'none'; }
+function modeItems() {
+  const it = [
+    { icon: 'solid', label: 'суцільно', on: curMode === 1, act: () => mode(1) },
+    { icon: 'ghost', label: 'напівпрозоро', on: curMode === 2, act: () => mode(2) },
+    { icon: 'wire', label: 'лінії', on: curMode === 3, act: () => mode(3) },
+  ];
+  if (SERVICE) it.push('-',
+    { icon: 'hw', label: 'фурнітура', on: showF, keep: true, act: () => { showF = !showF; applyVis(); renderTree(); } },
+    { icon: 'prof', label: 'профілі', on: showB, keep: true, act: () => { showB = !showB; applyVis(); renderTree(); } },
+    { icon: 'lines', label: 'відрізки', on: showL, keep: true, act: () => { showL = !showL; applyVis(); renderTree(); } });
+  return it;
+}
+function camItems() {
+  return [
+    { icon: 'persp', label: 'перспектива', on: view.persp, act: () => { view.strict = false; setPersp(true); } },
+    { icon: 'ortho', label: 'без перспективи', on: !view.persp, act: () => { view.strict = false; setPersp(false); } },
+    '-',
+    { icon: 'fit', label: 'вписати', act: fitVisible },
+  ];
+}
+// открыто ли хоть что-то — от этого кнопка «открыть / закрыть всё»
+function anyOpen() { for (const id in animNode) if (animNode[id].t > 0.5) return true; return false; }
+function syncOC(o = anyOpen()) { setIcon('bOC', o ? 'close' : 'open'); const b = $('bOC'); if (b) b.title = o ? 'закрити все' : 'відкрити все'; }
+
+// ---------------- структура: язычок у левого края ----------------
+// Кнопки нет (замечание 29.09): у левого края маленький язычок со значком. Нажал — структура выехала,
+// язычок встал на её правый край; нажал ещё раз — уехала. Потянул язычок — ширина структуры.
+function treeOpen() { return !$('tree').classList.contains('hidden'); }
+function setTree(open) {
+  $('tree').classList.toggle('hidden', !open);
+  if (open) renderTree();
+  placeTab(); place(); syncTools();
+}
+function placeTab() {
+  const tab = $('ttab'), t = $('tree'), s = safe(), open = treeOpen();
+  tab.innerHTML = ICON.tree + '<b>' + (open ? '‹' : '›') + '</b>';
+  tab.classList.toggle('open', open);
+  tab.style.left = (open ? t.offsetWidth : s.l) + 'px';
+  tab.style.top = Math.round((ribBottom() + barTop()) / 2 - tab.offsetHeight / 2) + 'px';   // середина места над значками
+}
+function wireTab() {
+  const tab = $('ttab'), t = $('tree');
+  let st = null;
+  tab.addEventListener('pointerdown', e => { e.preventDefault(); e.stopPropagation(); try { tab.setPointerCapture(e.pointerId); } catch (er) {} st = { x: e.clientX, moved: false }; });
+  tab.addEventListener('pointermove', e => {
+    if (!st) return;
+    if (!st.moved && Math.abs(e.clientX - st.x) < 6) return;
+    st.moved = true;
+    if (!treeOpen()) setTree(true);
+    const w = Math.max(0.2, Math.min(0.95, e.clientX / innerWidth));
+    t.style.width = Math.round(w * innerWidth) + 'px'; st.w = w; placeTab();
+  });
+  const end = () => {
+    if (!st) return;
+    if (!st.moved) setTree(!treeOpen());
+    else if (st.w) { try { localStorage.setItem('viewerTreeW' + (isLand() ? 'L' : 'P'), String(st.w)); } catch (e) {} place(); }
+    st = null;
+  };
+  tab.addEventListener('pointerup', end); tab.addEventListener('pointercancel', () => { st = null; });
+  placeTab();
+}
+function wireIcons() {
+  for (const id in BTN_ICON) {
+    const b = $(id); if (!b) continue;
+    const [k, label] = BTN_ICON[id];
+    b.innerHTML = ICON[k]; b.title = label; b.setAttribute('aria-label', label); b.classList.add('ic');
+  }
+  // телефон: подержал палец на кнопке — всплыла подпись, нажатие при этом не срабатывает
+  if (!TOUCH) return;
+  const bar = $('bar'); let t = null, shownOn = null;
+  bar.addEventListener('pointerdown', e => {
+    const b = e.target.closest('button'); if (!b || !b.title || b.id === 'bDims') return;
+    clearTimeout(t); t = setTimeout(() => { shownOn = b; tip(b); }, 450);
+  });
+  const stop = () => clearTimeout(t);
+  bar.addEventListener('pointerup', stop); bar.addEventListener('pointercancel', stop); bar.addEventListener('pointerleave', stop);
+  bar.addEventListener('click', e => { if (shownOn && e.target.closest('button') === shownOn) { e.stopPropagation(); e.preventDefault(); } shownOn = null; }, true);
+}
+function tip(b) {
+  let el = $('tip'); if (!el) { el = document.createElement('div'); el.id = 'tip'; document.body.appendChild(el); }
+  el.textContent = b.title; el.style.display = 'block';
+  const r = b.getBoundingClientRect(), w = el.offsetWidth, h = el.offsetHeight;
+  const x = r.left + r.width / 2 - w / 2, y = r.top - h - 8;   // значки внизу — подпись над кнопкой
+  el.style.left = Math.max(6, Math.min(innerWidth - w - 6, x)) + 'px'; el.style.top = Math.max(6, y) + 'px';
+  clearTimeout(tip.t); tip.t = setTimeout(() => { el.style.display = 'none'; }, 1600);
+}
+function wire() {
+  wireIcons();
+  wireTab(); initCube();
+  const mb = $('bMode'), cb = $('bCam');
+  mb._items = modeItems; cb._items = camItems;
+  mb.onclick = e => { e.stopPropagation(); openPop(mb, modeItems()); };
+  cb.onclick = e => { e.stopPropagation(); openPop(cb, camItems()); };
+  // окошко закрывается касанием мимо него
+  document.addEventListener('pointerdown', e => {
+    if (!popFor || e.target.closest('#pop') || e.target.closest('button') === popFor) return;
+    closePop();
+  }, true);
+  $('bOC').onclick = () => { const o = anyOpen() || anims.some(a => a.to === 1); startAnim(allAnimIds(), o ? 0 : 1); syncOC(!o); };
+  { const DS = new Set(M.door || []); parts.forEach(p => { p.isDoor = p.h.some(id => DS.has(id)); });
+    const b = $('bFac'); b.style.display = DS.size ? '' : 'none';
+    b.onclick = () => { pushUndo(); hideFac = !hideFac; setOn('bFac', hideFac); if (!drawOn) dropEasy(); applyVis(); }; }
+  $('bUndo').onclick = cancelPoint;
+  // подсказка по жестам — при первом открытии на телефоне
+  const hint = $('hint');
+  let seen = false; try { seen = localStorage.getItem('viewerHint') === '1'; } catch (e) {}
+  if (TOUCH && !seen) hint.classList.add('show');
+  hint.onclick = () => { hint.classList.remove('show'); try { localStorage.setItem('viewerHint', '1'); } catch (e) {} };
+  $('q').oninput = renderTree;
+  $('tOnly').onclick = isolateSel; $('tHide').onclick = hideSel; $('tAll').onclick = showAll;
+  $('tFit').onclick = () => { if (selSet.length) fitBox(visibleBox(true)); };
+  // Рулетка — только вкл/выкл (29.09): выключил — размеры спрятаны, включил — вернулись; габарит — её способ справа вверху
+  $('bRuler').onclick = () => {
+    if (ruler) { stopRuler(); return; }
+    ruler = true; rp = []; setOn('bRuler', true); cv.style.cursor = 'none'; $('st').textContent = RHINT[rmode]; syncTools();
+    if (dims.length) setDimsShown(true);
+    if (rmode === 'gab') gabShow();
+  };
+  { let t = null, long = false; const b = $('bDims');
+    b.addEventListener('pointerdown', () => { long = false; t = setTimeout(() => { long = true; clearDims(); }, 650); });
+    b.addEventListener('pointerup', () => { clearTimeout(t); if (!long) setDimsShown(!dimsShown); });
+    b.addEventListener('pointerleave', () => clearTimeout(t));
+    b.addEventListener('contextmenu', e => { e.preventDefault(); clearTimeout(t); clearDims(); }); }
+  $('bShowAll').onclick = showAll;
+  if (DRAW_OK) { $('bDraw').style.display = ''; $('bDraw').onclick = () => setDraw(!drawOn); wireOverlay(); wireDraw(); }
+}
+
+// ---------------- креслення: кадры для отчёта Федосова (Алексей 04.10) ----------------
+// Только компьютер и только файл-страница из «Заказы» (модель внутри файла): по ссылке у заказчика вкладки нет.
+// Кадр = один файл: лист — SVG (вектор, рёбра и размеры), снимок — PNG (как на экране). Кладутся в папки зоны, откуда
+// их берёт отчёт (пресет «Заказчику», источник «Динамический»): <заказ>\5. Креслення\Чертежи для отчета(wmf)\<зона>
+// и …\Визуализация\<зона>, имена «01 — …» по порядку. Пишет локальный сервер (127.0.0.1:8765, /draw/…).
+// Лист — бумага А3 (400 × 283 мм), привязан к модели: колесо и сдвиг приближают лист целиком — линии, цифры и рамку
+// вместе, на экране ровно то, что будет на бумаге. Масштаб чертежа (мм модели на мм бумаги) — по виду или закреплённый.
+// В «линиях» модель не вращается: только строгие виды (кнопки, грани кубика). Невидимого на листе нет: детали белые и
+// закрывают то, что за ними и внутри них; видимость каждого ребра проверяется по глубине кадра, точка за точкой.
+// Размеры на листе — по правилам чертежа (Алексей 04.10): засечки или стрелки, число вдоль линии, шрифт как в Базисе,
+// на каждом виде — только размеры этого вида; ручки: концы прилипают к углам и линиям, середина отводит линию поперёк.
+const LOCAL = window.__LOCAL || null;
+const DRAW_OK = !!window.__MODEL && !TOUCH;
+const SRV = 'http://127.0.0.1:8765';
+const SHEET_W = 400, SHEET_H = 283;
+const SCALES = [5, 10, 15, 20, 25, 30, 40, 50, 75, 100];
+const DFONT = 'Sofia Sans Condensed';
+const DIR_DRAW = LOCAL ? LOCAL.order + '\\5. Креслення\\Чертежи для отчета(wmf)\\' + LOCAL.zone : '';
+const DIR_SHOT = LOCAL ? LOCAL.order + '\\5. Креслення\\Визуализация\\' + LOCAL.zone : '';
+const DRAW_MAT = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
+const DRAW_SEL = DRAW_MAT.clone(); DRAW_SEL.color.setHex(0xd4e3f3);
+const DRAW_GLASS = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false });   // стекло не закрывает то, что за ним
+// глубина кадра — 24 бита в цвете точки (свой простой материал, без упаковок three — одинаково в любой версии)
+const DEPTH_MAT = new THREE.ShaderMaterial({ side: THREE.DoubleSide,
+  vertexShader: 'void main(){ gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+  fragmentShader: 'void main(){ float v = floor(gl_FragCoord.z * 16777215.0 + 0.5); float r = floor(v / 65536.0);' +
+    ' float g = floor((v - r * 65536.0) / 256.0); float b = v - r * 65536.0 - g * 256.0; gl_FragColor = vec4(r / 255.0, g / 255.0, b / 255.0, 1.0); }' });
+let drawLines = true, drawFix = 0, drawN = 20, sheetC = null;   // линии/цвет; закреплённый масштаб; масштаб листа; середина листа
+let dimEnd = 'tick'; try { dimEnd = localStorage.getItem('drawDimEnd') || 'tick'; } catch (e) {}
+let drawHid = true; try { drawHid = localStorage.getItem('drawHid') !== '0'; } catch (e) {}   // невидимые линии в кресленні
+let drawTool = null, tpts = [], tAxis = null, tLine = 0, tSide = 1, chainPrev = null, preview = null, selDim = null;
+const autoFlags = {};                                      // авторазмеры по видам: { mod, all }
+const drawFiles = { d: [], s: [] };                        // что лежит в папках отчёта
+const fEdges = new Map();
+const V3 = () => new THREE.Vector3();
+const toScr = v => { const s = v.clone().project(cam); return [(s.x + 1) / 2 * innerWidth, (1 - s.y) / 2 * innerHeight]; };
+const fmtN = n => String(Math.round(n * 10) / 10).replace('.', ',');
+// рёбра фурнитуры — только для креслення (на экране у фурнитуры рёбер нет): одна копия на форму
+function drawEdgesFor(p) {
+  if (p.dEdges) return p.dEdges;
+  p.dEdges = []; p.dHid = [];
+  if (p.isF) for (const m of p.meshes) {
+    let g = fEdges.get(m.geometry);
+    if (!g) { g = new THREE.EdgesGeometry(m.geometry, 30); fEdges.set(m.geometry, g); }
+    const ln = new THREE.LineSegments(g, EDGE); ln.visible = false; m.parent.add(ln); p.dEdges.push(ln);
+    const lh = new THREE.LineSegments(g, EDGE_HID); lh.visible = false; lh.renderOrder = 1; m.parent.add(lh); p.dHid.push(lh);   // за деталью — светлой
+  }
+  return p.dEdges;
+}
+const isGlassMesh = m => m.userData.mat ? m.userData.glass : !!(m.material.userData.base || m.material).transparent;
+// направления вида: вправо и вверх на экране — какие оси модели (буква и знак)
+function viewDir() { return cam.getWorldDirection(V3()); }
+function viewAxes() {
+  cam.updateMatrixWorld();
+  const r = V3().setFromMatrixColumn(cam.matrixWorld, 0), u = V3().setFromMatrixColumn(cam.matrixWorld, 1);
+  const big = v => ['x', 'y', 'z'].reduce((p, q) => Math.abs(v[q]) > Math.abs(v[p]) ? q : p, 'x');
+  const R = big(r), U = big(u);
+  return { R, U, D: ['x', 'y', 'z'].find(q => q !== R && q !== U), rs: Math.sign(r[R]) || 1, us: Math.sign(u[U]) || 1 };
+}
+function perpAxis(axis) { const { R, U } = viewAxes(); return AX[axis === R ? U : R].clone(); }
+function viewKey() { const d = viewDir(); return [d.x, d.y, d.z].map(v => Math.round(v * 100)).join(','); }
+function flags() { const k = viewKey(); return autoFlags[k] || (autoFlags[k] = { mod: false, all: false }); }
+// размер принадлежит виду, на котором поставлен; старые (без вида) — если лежат в плоскости вида
+function dimHere(dm) {
+  // лист «с фасадами» и лист «без фасадов» — у каждого свои размеры (габариты на листе без фасадов не повторяются)
+  if (dm.fs !== undefined && dm.fs !== hideFac) return false;
+  const d = viewDir();
+  if (dm.vdir) return dm.vdir.dot(d) > 0.99;
+  return !!dm.axis && Math.abs(AX[dm.axis].dot(d)) < 0.1;
+}
+
+function setDraw(on) {
+  if (on === drawOn) return;
+  if (on) { closePop(); mode(1); if (ruler) stopRuler(); }
+  drawOn = on;
+  clipApply();                                              // разрез вида — только в кресленні
+  document.documentElement.classList.toggle('draw', on);
+  setOn('bDraw', on);
+  for (const id of ['bMode', 'bRuler']) $(id).style.display = on ? 'none' : '';
+  // подсказка живёт в строке внизу, пока открыто креслення; вышли — обратно к значкам
+  const st = $('st'); if (on) $('dstat').insertBefore(st, $('dstat').querySelector('.sr')); else $('bar').appendChild(st);
+  setTool(null);
+  for (const dm of dims) if (dm.g) dm.g.visible = dimsShown && !on;
+  if (on) { frameName = L('n_front'); renderPanel(); applyLook(); layout(); strictView(0, 0); checkFolders(); }
+  else { selDim = null; closeFly(); applyLook(); $('dpanel').replaceChildren(); $('dsvg').replaceChildren(); placeCtx(); layout(); updRuler(); }
+  syncTools(); need();
+}
+// вид в кресленні: «линии» — белые детали, чёрные рёбра, без перспективы; «цвет» — как обычно (для снимков)
+function applyLook() {
+  const L = drawOn && drawLines;
+  for (const p of parts) {
+    for (const m of p.meshes) {
+      if (L) {
+        if (!m.userData.mat) { m.userData.mat = m.material; m.userData.glass = !!(m.material.userData.base || m.material).transparent; }
+        m.material = m.userData.glass ? DRAW_GLASS : DRAW_MAT;
+      } else if (m.userData.mat) { m.material = m.userData.mat; delete m.userData.mat; }
+    }
+    // рёбра фурнитуры: в 3D всегда (иначе в «линиях» она пропадает), в кресленні — только в режиме «линии»
+    if (p.isF) { for (const l of drawEdgesFor(p)) l.visible = L || !drawOn; for (const l of p.dHid) l.visible = (L && drawHid) || (!drawOn && curMode === 3); }
+  }
+  for (const o of markObjs) o.visible = !drawOn;
+  // невидимые линии (Алексей 08.10: «мне нужно понимание и передавать в чертёж»): светлые, там где линию закрывает деталь
+  for (const l of hidEdges) l.visible = (L && drawHid && !l.userData.mark) || (!drawOn && curMode === 3);
+  EDGE_HID.color.setHex(L ? 0xa9b1ba : 0x9aa4ae); EDGE_HID.opacity = L ? 0.75 : 0.45;
+  EDGE.color.setHex(L ? 0x000000 : 0x0c0e11); EDGE.opacity = L ? 1 : 0.92;
+  document.documentElement.classList.toggle('dlines', L);
+  $('bCam').style.display = L ? 'none' : '';
+  if (L && view.persp) setPersp(false);
+  paint(); syncPanel();
+}
+// ---------- лист: прямоугольник бумаги в плоскости вида, стоит на модели ----------
+const pxPerPaper = () => drawN * innerHeight / viewHeight();          // точек экрана на мм бумаги
+function sheetRect() {
+  cam.updateMatrixWorld();
+  const r = V3().setFromMatrixColumn(cam.matrixWorld, 0), u = V3().setFromMatrixColumn(cam.matrixWorld, 1);
+  const hw = SHEET_W * drawN / 2, hh = SHEET_H * drawN / 2;
+  const a = toScr(sheetC.clone().addScaledVector(r, -hw).addScaledVector(u, hh)), b = toScr(sheetC.clone().addScaledVector(r, hw).addScaledVector(u, -hh));
+  return { x0: a[0], y0: a[1], w: b[0] - a[0], h: b[1] - a[1] };
+}
+// масштаб по виду: видимое с полями под размеры (22 мм бумаги с каждой стороны) влезает в лист; любое число, не только стандартное
+function fitSheet() {
+  const b = visibleBox(false); if (b.isEmpty()) return;
+  if (clipPl) {                                             // разрез вида по оси — лист по оставшемуся
+    const nn = clipPl.normal, ax = ['x', 'y', 'z'].find(q => Math.abs(nn[q]) > 0.999);
+    if (ax) { const c = -clipPl.constant / nn[ax]; if (nn[ax] > 0) b.min[ax] = Math.max(b.min[ax], c); else b.max[ax] = Math.min(b.max[ax], c); }
+    if (b.isEmpty()) return;
+  }
+  const c = b.getCenter(V3()); view.target.copy(c); place(); cam.updateMatrixWorld();
+  const right = V3().setFromMatrixColumn(cam.matrixWorld, 0), up = V3().setFromMatrixColumn(cam.matrixWorld, 1);
+  let w = 0, h = 0;
+  for (const x of [b.min.x, b.max.x]) for (const y of [b.min.y, b.max.y]) for (const z of [b.min.z, b.max.z]) {
+    const d = new THREE.Vector3(x, y, z).sub(c); w = Math.max(w, Math.abs(d.dot(right))); h = Math.max(h, Math.abs(d.dot(up)));
+  }
+  const m = 22;
+  drawN = drawFix || Math.ceil(Math.max(2 * w / (SHEET_W - 2 * m), 2 * h / (SHEET_H - 2 * m)) * 10) / 10;
+  sheetC = c.clone();
+  fitView();
+}
+// показать лист целиком в свободном месте экрана
+function fitView() {
+  if (!sheetC) return;
+  const fr = freeRect(), fw = fr.x1 - fr.x0 - 40, fh = fr.y1 - fr.y0 - 40;
+  const mmpp = Math.max(SHEET_W * drawN / fw, SHEET_H * drawN / fh);
+  view.target.copy(sheetC); view.dist = mmpp * innerHeight / (2 * Math.tan(THREE.MathUtils.degToRad(persp.fov / 2)));
+  place();
+}
+function drawInfo() {
+  if (!sheetC) return;
+  const S = sheetRect(), el = $('sheet');
+  el.style.left = S.x0 + 'px'; el.style.top = S.y0 + 'px'; el.style.width = S.w + 'px'; el.style.height = S.h + 'px';
+  const txt = view.persp ? L('noScale') : 'М 1:' + fmtN(drawN);
+  el.firstChild.textContent = txt;
+  const t = $('dScaleNow'); if (t) t.textContent = txt + (view.persp ? '' : ' (' + L(drawFix ? 'fixed' : 'byView') + ')');
+  const sr = document.querySelector('#dstat .sr'), cv0 = curView();
+  if (sr) sr.textContent = [cv0 ? L('n_' + cv0) + (hideFac ? L('n_nofac') : '') : '', txt, LOCAL ? LOCAL.zone : ''].filter(Boolean).join('   ·   ');
+  drawOverlay();
+}
+function placeSheet() { drawInfo(); }
+// ---------- размер на листе: линии, засечки/стрелки, число ----------
+// toP — точка модели → [x, y] в единицах вывода; k — единиц вывода на мм бумаги (экран: точки, файл: 1)
+function dimPrims(dm, toP, k) {
+  const L = [], T = [], F = [];
+  let pa, pb, pa2, pb2, val;
+  if (dm.axis) {
+    const u0 = AX[dm.axis], tl = dm.b.clone().sub(dm.a).dot(u0), a2 = dm.a.clone().add(dm.off), b2 = a2.clone().addScaledVector(u0, tl);
+    pa = toP(dm.a); pb = toP(dm.b); pa2 = toP(a2); pb2 = toP(b2); val = tl;
+  } else { pa = pa2 = toP(dm.a); pb = pb2 = toP(dm.b); val = dm.a.distanceTo(dm.b); }
+  let ex = pb2[0] - pa2[0], ey = pb2[1] - pa2[1];
+  const Ln = Math.hypot(ex, ey);
+  if (Ln < 0.5 * k) return null;                          // размер вдоль взгляда — на листе точка
+  ex /= Ln; ey /= Ln;
+  if (ex < -1e-6 || (Math.abs(ex) < 1e-6 && ey > 0)) { ex = -ex; ey = -ey; }   // читается слева направо / снизу вверх
+  if (dm.axis) for (const [p, p2] of [[pa, pa2], [pb, pb2]]) {   // выносные: зазор 1 мм от детали, 2 мм за размерную линию
+    const wx = p2[0] - p[0], wy = p2[1] - p[1], wl = Math.hypot(wx, wy);
+    if (wl < 0.3 * k) continue;
+    const g0 = wl > 3 * k ? k : 0;
+    L.push([p[0] + wx / wl * g0, p[1] + wy / wl * g0, p2[0] + wx / wl * 2 * k, p2[1] + wy / wl * 2 * k]);
+  }
+  const tick = dimEnd === 'tick', ov = tick && dm.axis ? 2 * k : 0, sg = (pb2[0] - pa2[0]) * ex + (pb2[1] - pa2[1]) * ey >= 0 ? 1 : -1;
+  L.push([pa2[0] - ex * ov * sg, pa2[1] - ey * ov * sg, pb2[0] + ex * ov * sg, pb2[1] + ey * ov * sg]);
+  if (tick) {                                             // засечка: 3 мм под 45° к линии
+    const s = 1.5 * k / Math.SQRT2, tx = (ex + ey) * s, ty = (ey - ex) * s;
+    for (const p of [pa2, pb2]) T.push([p[0] - tx, p[1] - ty, p[0] + tx, p[1] + ty]);
+  } else {
+    const AL = Math.min(3 * k, Ln / 3), AW = AL * 0.28;
+    for (const [p, s] of [[pa2, sg], [pb2, -sg]]) {
+      const bx = p[0] + ex * AL * s, by = p[1] + ey * AL * s;
+      F.push([p[0], p[1], bx - ey * AW, by + ex * AW, bx + ey * AW, by - ex * AW]);
+    }
+  }
+  const ang = Math.atan2(ey, ex) * 180 / Math.PI, r = ang * Math.PI / 180;
+  const tp = [(pa2[0] + pb2[0]) / 2, (pa2[1] + pb2[1]) / 2];
+  // на листе — до целого (Алексей 06.10: сотые заказчика путают; цепочка может не сойтись с общим на мм — так и оставить)
+  return { L, T, F, txt: dm.text != null ? String(dm.text) : String(Math.round(Math.abs(val))), x: tp[0] + Math.sin(r) * k, y: tp[1] - Math.cos(r) * k, ang, pa, pb, tp };
+}
+function dimSvg(g, k, o) {
+  const col = o.sel ? '#e0301e' : o.prev ? '#7aa7e0' : '#1f5fbf', f = v => String(Math.round(v * 100) / 100);
+  const seg = a => a.map(q => 'M' + f(q[0]) + ' ' + f(q[1]) + 'L' + f(q[2]) + ' ' + f(q[3])).join('');
+  const sw = o.exp ? 0.18 : Math.max(1, 0.18 * k), tw = o.exp ? 0.35 : Math.max(1.4, 0.35 * k);
+  let s = `<path d="${seg(g.L)}" fill="none" stroke="${col}" stroke-width="${f(sw)}"/>`;
+  if (g.T.length) s += `<path d="${seg(g.T)}" fill="none" stroke="${col}" stroke-width="${f(tw)}" stroke-linecap="round"/>`;
+  if (g.F.length) s += `<path d="${g.F.map(t => 'M' + f(t[0]) + ' ' + f(t[1]) + 'L' + f(t[2]) + ' ' + f(t[3]) + 'L' + f(t[4]) + ' ' + f(t[5]) + 'Z').join('')}" fill="${col}" stroke="none"/>`;
+  s += `<text x="${f(g.x)}" y="${f(g.y)}" font-family="${DFONT}" font-size="${f(3.5 * k)}" fill="${col}" text-anchor="middle"` +
+    (Math.abs(g.ang) > 0.01 ? ` transform="rotate(${f(g.ang)} ${f(g.x)} ${f(g.y)})"` : '') + (o.exp || o.prev ? '' : ` class="dt" data-d="${o.i}"`) + `>${g.txt}</text>`;
+  if (!o.exp && !o.prev) s += `<path d="${seg(g.L)}" class="dh" data-d="${o.i}"/>`;
+  return s;
+}
+// размеры на экране — тем же рисунком, что в файле, в масштабе листа
+function drawOverlay() {
+  const sv = $('dsvg'); if (!sv) return;
+  if (!drawOn) { if (sv.firstChild) sv.replaceChildren(); return; }
+  cam.updateMatrixWorld();
+  const k = pxPerPaper();
+  let h = '';
+  if (dimsShown) dims.forEach((dm, i) => { if (!dimHere(dm)) return; const g = dimPrims(dm, toScr, k); if (g) h += dimSvg(g, k, { i, sel: dm === selDim }); });
+  if (preview) { const g = dimPrims(preview, toScr, k); if (g) h += dimSvg(g, k, { prev: true }); }
+  const o = sheetC ? toScr(sheetC) : [0, 0];
+  if (sheetC) secs.forEach((sc, i) => { if (secHere(sc)) h += secSvg(secPrims(sc, o, k, toScr), k, { i, sel: sc === selSec }); });
+  // разрез вида: линия со стрелками (куда смотрим) — на виде, где плоскость ребром; за линию можно тянуть
+  if (sheetC && clipPl && clipEdgeOn()) {
+    const g = clipPrims(k), [pa, pb] = clipLine().map(toScr);
+    h += secSvg(g, k, { prev: !!clipDrag });
+    h += `<path class="ch" d="M${pa[0]} ${pa[1]}L${pb[0]} ${pb[1]}" data-k="clip"/>`;
+  }
+  if (cd && drawTool === 'clip') {
+    if (cd.b) h += secSvg(secPrims({ a: cd.a, b: cd.b, s: cd.s || 1, vdir: viewDir(), letter: '' }, o, k, toScr, true), k, { prev: true });
+    else if (cd.a && cd.bh) { const p = toScr(cd.a), q = toScr(cd.bh); h += `<path d="M${p[0]} ${p[1]}L${q[0]} ${q[1]}" stroke="#7aa7e0" stroke-width="2" stroke-dasharray="10 4 2 4" fill="none"/>`; }
+  }
+  if (sd && drawTool === 'sect') {
+    if (sd.sec) h += secSvg(secPrims(sd.sec, o, k, toScr), k, { prev: true });
+    else if (sd.b) h += secSvg(secPrims({ a: sd.a, b: sd.b, s: sd.s || 1, vdir: viewDir(), letter: '' }, o, k, toScr, true), k, { prev: true });
+    else if (sd.a && sd.bh) { const p = toScr(sd.a), q = toScr(sd.bh); h += `<path d="M${p[0]} ${p[1]}L${q[0]} ${q[1]}" stroke="#7aa7e0" stroke-width="2" stroke-dasharray="10 4 2 4" fill="none"/>`; }
+  }
+  if (selDim && dims.includes(selDim) && dimHere(selDim)) {
+    const g = dimPrims(selDim, toScr, k);
+    if (g) for (const [p, n] of [[g.pa, 'a'], [g.pb, 'b'], [g.tp, 'm']]) h += `<rect class="grip" data-g="${n}" x="${p[0] - 5}" y="${p[1] - 5}" width="10" height="10"/>`;
+  }
+  sv.innerHTML = h;
+  placeCtx();
+}
+// ---------- прилипание точки: угол детали → линия (ребро, отрезок помещения) → просто место на виде ----------
+function snapDraw(x, y) {
+  const c = snapAt(x, y, [12]); if (c) return { p: c, kind: 'pt' };
+  const e = edgeAt(x, y); if (e) return { p: e.p, kind: 'edge' };
+  return { p: onTargetPlane(x, y) || V3(), kind: 'free' };
+}
+function showSnap(s) {
+  const mk = $('snapmk'), [x, y] = toScr(s.p);
+  mk.style.display = 'block'; mk.style.left = x + 'px'; mk.style.top = y + 'px';
+  mk.classList.toggle('snapped', s.kind === 'pt'); mk.classList.toggle('edge', s.kind === 'edge');
+}
+// ---------- ручки размера ----------
+// середина (число, линия) — отводит размерную линию поперёк; конец — прилипает к углу/линии, число пересчитывается,
+// а размерная линия стоит на месте: вбок меняется только длина выносной ножки (Алексей 04.10)
+function dragDimTo(dm, kind, x, y) {
+  if (!dm.axis) return;
+  const w = perpAxis(dm.axis);
+  if (kind === 'm') {
+    const P = onTargetPlane(x, y); if (!P) return;
+    const old = dm.off.clone(); dm.off.copy(w).multiplyScalar(P.sub(dm.a).dot(w));
+    // размер из цепочки — едет вся цепочка на то же расстояние (Алексей 06.10)
+    if (dm.chain) {
+      const dv = dm.off.clone().sub(old);
+      for (const o of dims) if (o !== dm && o.chain === dm.chain && o.axis === dm.axis) { o.off.add(dv); buildDim(o); }
+      if (mc && mc.id === dm.chain) mc.line += dv.dot(w);
+    }
+  }
+  else {
+    const s = snapDraw(x, y); showSnap(s);
+    if (kind === 'a') { const a2 = dm.a.clone().add(dm.off); dm.a.copy(s.p); dm.off.copy(w).multiplyScalar(a2.sub(dm.a).dot(w)); }
+    else dm.b.copy(s.p);
+  }
+  buildDim(dm); drawOverlay();
+}
+function wireOverlay() {
+  const sv = $('dsvg'); let dr = null;
+  sv.addEventListener('pointerdown', e => {
+    const di = e.target.dataset.d, gr = e.target.dataset.g, si = e.target.dataset.s;
+    if (e.target.dataset.k === 'clip' && clipPl) {            // линия разреза вида: тянуть параллельно
+      e.preventDefault(); e.stopPropagation();
+      if (e.button === 0) clipDrag = { x: e.clientX, y: e.clientY, c0: clipPl.constant };
+      return;
+    }
+    if (si !== undefined) {                                   // сечение: щелчок — выделить (плашка), тянуть — двигать, правая — удалить
+      e.preventDefault(); e.stopPropagation();
+      const sc = secs[+si]; if (!sc) return;
+      if (e.button === 2) { secAct('del', sc); return; }
+      selSec = sc; selDim = null; dr = { sc, x: e.clientX, y: e.clientY, p0: sc.pos.slice(), moved: false }; drawOverlay(); return;
+    }
+    if (di === undefined && gr === undefined) return;
+    e.preventDefault(); e.stopPropagation(); selSec = null;
+    if (gr) { dr = { dm: selDim, kind: gr, x: e.clientX, y: e.clientY, moved: false }; return; }
+    const dm = dims[+di]; if (!dm) return;
+    if (e.button === 2) { pushUndo(); removeDim(dm); drawOverlay(); return; }
+    selDim = dm; dr = { dm, kind: 'm', x: e.clientX, y: e.clientY, moved: false }; drawOverlay();
+  });
+  sv.addEventListener('contextmenu', e => e.preventDefault());
+  addEventListener('pointermove', e => {
+    if (clipDrag) { clipDragTo(e.clientX, e.clientY, clipDrag.x, clipDrag.y, clipDrag.c0); return; }
+    if (!dr) return;
+    if (!dr.moved && Math.hypot(e.clientX - dr.x, e.clientY - dr.y) < 3) return;
+    if (!dr.moved) { dr.moved = true; pushUndo(); }
+    if (dr.sc) { const k = pxPerPaper(); dr.sc.pos = [dr.p0[0] + (e.clientX - dr.x) / k, dr.p0[1] + (e.clientY - dr.y) / k]; drawOverlay(); return; }
+    dragDimTo(dr.dm, dr.kind, e.clientX, e.clientY);
+  });
+  addEventListener('pointerup', () => {
+    if (clipDrag) { clipDrag = null; clipCaps(); drawOverlay(); return; }
+    if (dr) { dr = null; hideHover(); drawOverlay(); }
+  });
+}
+// ---------- инструменты: линейный, цепочка, от базы, габаритный, полезные ----------
+// подсказки инструментов — в словаре креслення (h_lin, h_chain, …), на выбранном языке
+// инструменты «нажал и потянул» — без прицела по углам
+const PRESS = new Set(['mod', 'fac', 'easy']);
+const snapTool = () => !!drawTool && drawTool !== 'gab' && !PRESS.has(drawTool);
+function setTool(t) {
+  drawTool = t; tpts = []; tAxis = null; chainPrev = null; preview = null; sd = null; cd = null; hideHover();
+  if (PRESS.has(t)) mcReset(); else mc = null;
+  cv.style.cursor = snapTool() ? 'none' : '';
+  $('st').textContent = t ? L('h_' + t) : '';
+  syncPanel(); drawOverlay();
+}
+function endTool() {
+  tpts = []; tAxis = null; chainPrev = null; preview = null; sd = null; cd = null;
+  if (PRESS.has(drawTool)) mcReset();                     // другой вид / Esc — следующая цепочка своя
+  if (drawTool) $('st').textContent = L('h_' + drawTool); drawOverlay();
+}
+// горизонтально или вертикально — по тому, куда увели мышь от двух точек (как в Базисе)
+function orient(p1, p2, x, y) {
+  const { R, U } = viewAxes(), a = toScr(p1), b = toScr(p2);
+  const dx = Math.abs(a[0] - b[0]), dy = Math.abs(a[1] - b[1]);
+  if (dy < 3) return R; if (dx < 3) return U;
+  const inX = x > Math.min(a[0], b[0]) && x < Math.max(a[0], b[0]), inY = y > Math.min(a[1], b[1]) && y < Math.max(a[1], b[1]);
+  if (inX && !inY) return R; if (inY && !inX) return U;
+  return dx >= dy ? R : U;
+}
+function mkPrev(a, b, axis, line) { const w = perpAxis(axis); return { a, b, axis, off: w.multiplyScalar(line - a.dot(w)), text: null }; }
+function toolHover(x, y) {
+  if (drawTool === 'sect') { secHover(x, y); return; }
+  if (drawTool === 'clip') { clipHover(x, y); return; }
+  const s = snapDraw(x, y); showSnap(s);
+  preview = null;
+  if (tAxis === null && tpts.length === 2) {
+    const o = orient(tpts[0], tpts[1], x, y), P = onTargetPlane(x, y);
+    if (P) preview = mkPrev(tpts[0], tpts[1], o, P.dot(perpAxis(o)));
+  } else if (tAxis !== null) {
+    const from = drawTool === 'chain' ? chainPrev : tpts[0];
+    preview = mkPrev(from, s.p, tAxis, drawTool === 'base' ? tLine + tSide * 7 * drawN : tLine);
+  } else if (tpts.length === 1) preview = { a: tpts[0], b: s.p, axis: null, off: V3() };
+  drawOverlay();
+}
+function toolDim(a, b) {
+  if (Math.abs(b.clone().sub(a).dot(AX[tAxis])) < 0.5) { toast('точки на одной линии — 0 мм'); return; }
+  const dm = addDim(a.clone(), b.clone()), w = perpAxis(tAxis);
+  dm.axis = tAxis; dm.off = w.multiplyScalar(tLine - a.dot(w)); if (drawTool !== 'lin') dm.chain = tChain; buildDim(dm);
+}
+function toolClick(x, y) {
+  if (drawTool === 'easy') { pushUndo(); easyPick(x, y); drawOverlay(); return; }
+  if (drawTool === 'sect') { secClick(x, y); return; }
+  if (drawTool === 'clip') { clipClick(x, y); return; }
+  const s = snapDraw(x, y);
+  if (tAxis === null) {
+    if (tpts.length < 2) { tpts.push(s.p.clone()); toolHover(x, y); return; }
+    const o = orient(tpts[0], tpts[1], x, y), P = onTargetPlane(x, y); if (!P) return;
+    const w = perpAxis(o);
+    tAxis = o; tLine = P.dot(w); tSide = Math.sign(tLine - tpts[0].dot(w)) || 1; tChain = ++chainSeq;
+    pushUndo(); toolDim(tpts[0], tpts[1]); chainPrev = tpts[1];
+    if (drawTool === 'lin') endTool(); else { preview = null; $('st').textContent = L('h_next'); drawOverlay(); }
+    return;
+  }
+  const from = drawTool === 'chain' ? chainPrev : tpts[0];
+  pushUndo();
+  if (drawTool === 'base') tLine += tSide * 7 * drawN;      // каждый следующий от базы — ступенькой дальше от чертежа
+  toolDim(from, s.p); chainPrev = s.p.clone(); drawOverlay();
+}
+function drawHover(x, y) {
+  if (snapTool()) { toolHover(x, y); return; }
+  hideHover();
+  cv.style.cursor = pick(x, y) ? (PRESS.has(drawTool) ? 'crosshair' : 'pointer') : 'default';
+}
+// ---------- сечение (Алексей 08.10): линия А-А на виде → профиль детали рядом на листе, в своём масштабе ----------
+// Две точки — линия сечения (почти горизонтальная / вертикальная выпрямляется), третий щелчок — с какой стороны смотреть,
+// дальше сечение едет за мышью, щелчок — положить. Режется то, что видно на виде: треугольники деталей — плоскостью через
+// линию и направление взгляда, в пределах линии. Срез — контур и штриховка 45°. Сечение принадлежит виду, как размеры.
+const SEC_LET = 'АБВГДЕЖИКЛМНПРСТУФШЩЭЮЯ';
+const SEC_SCALES = [1, 2, 2.5, 5, 10];
+const secs = [];
+let selSec = null, sd = null;                              // sd — сечение в работе: { a, bh, b, s, sec }
+function secHere(sc) { return (sc.fs === undefined || sc.fs === hideFac) && sc.vdir.dot(viewDir()) > 0.99; }
+// оси сечения: t — вдоль линии, n — поперёк (куда смотрим, со знаком s), на листе: вправо R, вверх U (к зрителю вида)
+function secAxes(sc) {
+  const t = sc.b.clone().sub(sc.a), len = t.length(); t.normalize();
+  const n = t.clone().cross(sc.vdir).normalize();
+  return { t, len, n, U: sc.vdir.clone().negate(), R: t.clone().multiplyScalar(sc.s) };
+}
+function secCut(sc, only) {
+  const { t, len, n, U, R } = secAxes(sc), a = sc.a, c0 = a.dot(n) + 0.0007;   // чуть мимо, чтобы не попасть ровно в вершины
+  root.updateMatrixWorld(true);
+  const G = [], pi = [], A = V3(), B = V3(), C = V3(), e1 = V3(), e2 = V3(), dir = V3(), P = [A, B, C];
+  parts.forEach((p, i) => {
+    if (only ? !only.includes(i) : (!p.g.visible || p.isL)) return;
+    const segs = [], seen = new Set();
+    for (const m of p.meshes) {
+      if (!only && !shown(m)) continue;
+      const pos = m.geometry.attributes.position, idx = m.geometry.index, mw = m.matrixWorld, cnt = idx ? idx.count : pos.count;
+      for (let k = 0; k + 2 < cnt; k += 3) {
+        for (let j = 0; j < 3; j++) P[j].fromBufferAttribute(pos, idx ? idx.getX(k + j) : k + j).applyMatrix4(mw);
+        const D = [A.dot(n) - c0, B.dot(n) - c0, C.dot(n) - c0];
+        if ((D[0] > 0 && D[1] > 0 && D[2] > 0) || (D[0] < 0 && D[1] < 0 && D[2] < 0)) continue;
+        const X = [];
+        for (let j = 0; j < 3; j++) { const q = (j + 1) % 3; if ((D[j] < 0) !== (D[q] < 0)) X.push(P[j].clone().lerp(P[q], D[j] / (D[j] - D[q]))); }
+        if (X.length !== 2) continue;
+        // направление отрезка — по повороту треугольника: у контура есть «внутри» (штриховка по правилу ненулевого обхода)
+        dir.crossVectors(n, e1.subVectors(B, A).cross(e2.subVectors(C, A)));
+        let [p0, p1] = X; if (p1.clone().sub(p0).dot(dir) < 0) [p0, p1] = [p1, p0];
+        const t0 = p0.clone().sub(a).dot(t), dt = p1.clone().sub(a).dot(t) - t0;
+        let l0 = 0, l1 = 1;
+        if (Math.abs(dt) > 1e-9) { const la = -t0 / dt, lb = (len - t0) / dt; l0 = Math.max(0, Math.min(la, lb)); l1 = Math.min(1, Math.max(la, lb)); }
+        else if (t0 < 0 || t0 > len) continue;
+        if (l1 - l0 < 1e-6) continue;
+        if (cutAway(p0.clone().lerp(p1, (l0 + l1) / 2))) continue;    // отсечённое разрезом вида — не режем
+        const qa = p0.clone().lerp(p1, l0).sub(a), qb = p0.clone().lerp(p1, l1).sub(a);
+        const s = [qa.dot(R), qa.dot(U), qb.dot(R), qb.dot(U)];
+        const r2 = v => Math.round(v * 100), k1 = r2(s[0]) + ',' + r2(s[1]), k2 = r2(s[2]) + ',' + r2(s[3]);
+        const key = k1 < k2 ? k1 + ';' + k2 : k2 + ';' + k1;     // Базис местами отдаёт треугольник дважды — один отрезок
+        if (seen.has(key) || k1 === k2) continue;
+        seen.add(key); segs.push(s);
+      }
+    }
+    if (segs.length) { G.push(segs); pi.push(i); }
+  });
+  let u0 = Infinity, v0 = Infinity, u1 = -Infinity, v1 = -Infinity;
+  for (const g of G) for (const s of g) { u0 = Math.min(u0, s[0], s[2]); u1 = Math.max(u1, s[0], s[2]); v0 = Math.min(v0, s[1], s[3]); v1 = Math.max(v1, s[1], s[3]); }
+  return { G, pi, box: [u0, v0, u1, v1] };
+}
+function secGeom(sc) { if (!sc.G) Object.assign(sc, secCut(sc, sc.pi)); return sc; }
+// точка сечения (мм детали) → мм бумаги от середины листа
+function secMap(sc) {
+  const kS = 1 / (sc.sN || drawN), [u0, v0, u1, v1] = sc.box, cu = (u0 + u1) / 2, cv = (v0 + v1) / 2;
+  const r = (sc.rot || 0) * Math.PI / 180, co = Math.cos(r), si = Math.sin(r);
+  return (u, v) => { const x = (u - cu) * kS, y = -(v - cv) * kS; return [sc.pos[0] + x * co - y * si, sc.pos[1] + x * si + y * co]; };
+}
+// штриховка 45° (вправо-вверх) по правилу ненулевого обхода; S и ответ — отрезки в мм бумаги
+function secHatch(S, step) {
+  const r = Math.SQRT1_2, E = S.map(s => [(s[0] - s[1]) * r, (s[0] + s[1]) * r, (s[2] - s[3]) * r, (s[2] + s[3]) * r]), out = [];
+  let y0 = Infinity, y1 = -Infinity; for (const e of E) { y0 = Math.min(y0, e[1], e[3]); y1 = Math.max(y1, e[1], e[3]); }
+  for (let c = Math.ceil(y0 / step) * step; c < y1; c += step) {
+    const X = [];
+    for (const e of E) if ((e[1] <= c) !== (e[3] <= c)) X.push([e[0] + (c - e[1]) / (e[3] - e[1]) * (e[2] - e[0]), e[3] > e[1] ? 1 : -1]);
+    X.sort((p, q) => p[0] - q[0]);
+    let w = 0, st = 0;
+    for (const [x, d] of X) {
+      const w0 = w; w += d;
+      if (!w0 && w) st = x; else if (w0 && !w && x - st > 0.05) out.push([(st + c) * r, (c - st) * r, (x + c) * r, (c - x) * r]);
+    }
+  }
+  return out;
+}
+const secLabel = sc => sc.letter + '–' + sc.letter + (sc.sN && Math.abs(sc.sN - drawN) > 1e-6 ? ' (1:' + fmtN(sc.sN) + ')' : '');
+// рисунок сечения: o — середина листа в единицах вывода, k — единиц на мм бумаги, toP — точка модели → вывод (линия на виде)
+function secPrims(sc, o, k, toP, noSec) {
+  const g = { O: [], H: [], C: [], F: [], T: [] };
+  // линия сечения на виде: толстые штрихи на концах, стрелки — куда смотрим, буквы у стрелок
+  const pa = toP(sc.a), pb = toP(sc.b), ex0 = pb[0] - pa[0], ey0 = pb[1] - pa[1], Ln = Math.hypot(ex0, ey0);
+  if (Ln > 1) {
+    const ex = ex0 / Ln, ey = ey0 / Ln, { n } = secAxes(sc), pn = toP(sc.a.clone().addScaledVector(n, sc.s * 100));
+    let sx = -ey, sy = ex; if ((pn[0] - pa[0]) * sx + (pn[1] - pa[1]) * sy < 0) { sx = -sx; sy = -sy; }
+    const sl = Math.min(8 * k, Ln / 2.5);
+    for (const [p, d] of [[pa, 1], [pb, -1]]) {
+      g.C.push([p[0], p[1], p[0] + ex * sl * d, p[1] + ey * sl * d]);
+      const bx = p[0] + ex * 2 * k * d, by = p[1] + ey * 2 * k * d, tx = bx + sx * 7 * k, ty = by + sy * 7 * k;
+      g.O.push([bx, by, tx - sx * 2.5 * k, ty - sy * 2.5 * k]);
+      g.F.push([tx, ty, tx - sx * 3 * k - ex * k, ty - sy * 3 * k - ey * k, tx - sx * 3 * k + ex * k, ty - sy * 3 * k + ey * k]);
+      g.T.push({ x: p[0] - ex * 3.5 * k * d + sx * 4.5 * k, y: p[1] - ey * 3.5 * k * d + sy * 4.5 * k + 1.8 * k, t: sc.letter });
+    }
+  }
+  if (noSec) return g;
+  secGeom(sc);
+  const mp = secMap(sc), Pp = (u, v) => mp(u, v), sh = [];
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const part of sc.G) {
+    const S = part.map(s => { const p = Pp(s[0], s[1]), q = Pp(s[2], s[3]); return [p[0], p[1], q[0], q[1]]; });
+    for (const s of S) { x0 = Math.min(x0, s[0], s[2]); x1 = Math.max(x1, s[0], s[2]); y0 = Math.min(y0, s[1], s[3]); y1 = Math.max(y1, s[1], s[3]); }
+    sh.push(S);
+  }
+  const step = Math.min(2, Math.max(0.8, Math.min(x1 - x0, y1 - y0) / 4));
+  const W = s => [o[0] + s[0] * k, o[1] + s[1] * k, o[0] + s[2] * k, o[1] + s[3] * k];
+  g.S = []; for (const S of sh) for (const s of S) g.S.push(W(s));
+  for (const S of sh) for (const s of secHatch(S, step)) g.H.push(W(s));
+  g.box = [o[0] + x0 * k, o[1] + y0 * k, o[0] + x1 * k, o[1] + y1 * k];
+  g.lab = { x: (g.box[0] + g.box[2]) / 2, y: g.box[1] - 3 * k, t: secLabel(sc) };
+  return g;
+}
+function secSvg(g, k, o) {
+  const col = o.sel ? '#e0301e' : o.prev ? '#7aa7e0' : '#000000', f = v => String(Math.round(v * 100) / 100);
+  const seg = a => a.map(q => 'M' + f(q[0]) + ' ' + f(q[1]) + 'L' + f(q[2]) + ' ' + f(q[3])).join('');
+  const w = (mm, px) => f(o.exp ? mm : Math.max(px, mm * k));
+  let s = '';
+  if (g.C.length) s += `<path d="${seg(g.C)}" fill="none" stroke="${col}" stroke-width="${w(0.8, 2.2)}"/>`;
+  if (g.O.length) s += `<path d="${seg(g.O)}" fill="none" stroke="${col}" stroke-width="${w(0.25, 1)}"/>`;
+  if (g.F.length) s += `<path d="${g.F.map(t => 'M' + f(t[0]) + ' ' + f(t[1]) + 'L' + f(t[2]) + ' ' + f(t[3]) + 'L' + f(t[4]) + ' ' + f(t[5]) + 'Z').join('')}" fill="${col}" stroke="none"/>`;
+  for (const t of g.T) s += `<text x="${f(t.x)}" y="${f(t.y)}" font-family="${DFONT}" font-size="${f(5 * k)}" fill="${col}" text-anchor="middle">${t.t}</text>`;
+  if (g.S) {
+    if (g.H.length) s += `<path d="${seg(g.H)}" fill="none" stroke="${col}" stroke-width="${w(0.18, 0.7)}"/>`;
+    s += `<path d="${seg(g.S)}" fill="none" stroke="${col}" stroke-width="${w(0.5, 1.4)}" stroke-linecap="round"/>`;
+    s += `<text x="${f(g.lab.x)}" y="${f(g.lab.y)}" font-family="${DFONT}" font-size="${f(5 * k)}" fill="${col}" text-anchor="middle">${g.lab.t}</text>`;
+    if (!o.exp && !o.prev) { const b = g.box, m = 6; s += `<rect class="sh" data-s="${o.i}" x="${f(b[0] - m)}" y="${f(b[1] - m - 5 * k)}" width="${f(b[2] - b[0] + 2 * m)}" height="${f(b[3] - b[1] + 2 * m + 5 * k)}"/>`; }
+  }
+  return s;
+}
+const scrToPaper = (x, y) => { const o = toScr(sheetC), k = pxPerPaper(); return [(x - o[0]) / k, (y - o[1]) / k]; };
+// почти горизонтальная / вертикальная линия на строгом виде — ровно
+function secStraight(a, p) {
+  const q = p.clone(); if (!view.strict) return q;
+  const { R, U } = viewAxes(), dx = Math.abs(p[R] - a[R]), dy = Math.abs(p[U] - a[U]);
+  if (dy < dx * 0.1) q[U] = a[U]; else if (dx < dy * 0.1) q[R] = a[R];
+  return q;
+}
+function secSide(a, b, x, y) {
+  const sa = toScr(a), sb = toScr(b), n = b.clone().sub(a).cross(viewDir()).normalize(), sn = toScr(a.clone().addScaledVector(n, 100));
+  const ex = sb[0] - sa[0], ey = sb[1] - sa[1], c1 = ex * (y - sa[1]) - ey * (x - sa[0]), c2 = ex * (sn[1] - sa[1]) - ey * (sn[0] - sa[0]);
+  return (c1 >= 0) === (c2 >= 0) ? 1 : -1;
+}
+function secHover(x, y) {
+  if (!sd) sd = {};
+  if (sd.sec) { hideHover(); sd.sec.pos = scrToPaper(x, y); drawOverlay(); return; }
+  if (sd.b) { hideHover(); sd.s = secSide(sd.a, sd.b, x, y); drawOverlay(); return; }
+  const s = snapDraw(x, y); showSnap(s);
+  if (sd.a) sd.bh = secStraight(sd.a, s.p);
+  drawOverlay();
+}
+function secClick(x, y) {
+  if (!sd) sd = {};
+  if (sd.sec) {                                            // положить на лист
+    pushUndo(); secs.push(sd.sec); sd = null; $('st').textContent = L('h_sect'); drawOverlay(); syncPanel(); return;
+  }
+  if (!sd.a) { sd.a = snapDraw(x, y).p.clone(); $('st').textContent = L('h_sect2'); secHover(x, y); return; }
+  if (!sd.b) {
+    const b = secStraight(sd.a, snapDraw(x, y).p), pa = toScr(sd.a), pb = toScr(b);
+    if (Math.hypot(pb[0] - pa[0], pb[1] - pa[1]) < 8) return;
+    sd.b = b.clone(); hideHover(); $('st').textContent = L('h_sect3'); secHover(x, y); return;
+  }
+  const used = new Set(secs.map(q => q.letter)), letter = [...SEC_LET].find(c => !used.has(c)) || '?';
+  const sc = { a: sd.a, b: sd.b, s: secSide(sd.a, sd.b, x, y), vdir: viewDir().clone(), fs: hideFac, letter, sN: 0, rot: 0, pos: scrToPaper(x, y) };
+  Object.assign(sc, secCut(sc));
+  if (!sc.G.length) { toast(L('sect_empty')); sd = null; $('st').textContent = L('h_sect'); drawOverlay(); return; }
+  sd = { sec: sc }; $('st').textContent = L('h_sect4'); drawOverlay();
+}
+function secAct(k, sc) {
+  pushUndo();
+  if (k === 'del') { secs.splice(secs.indexOf(sc), 1); selSec = null; }
+  else if (k === 'rot') sc.rot = ((sc.rot || 0) + 90) % 360;
+  else sc.sN = +k;
+  ctxFor = null; drawOverlay(); syncPanel();
+}
+// ---------- разрез вида (Алексей 08.10, как у Юдина): плоскость на всю сцену, всё по одну сторону отсечено ----------
+// Две точки — линия (почти ровная выпрямляется), третий щелчок — какую сторону оставить. Отсекается всё: мебель, стены,
+// линии слоёв, коммуникации. По месту среза деталей — контур. На виде, где плоскость видна ребром, её линию можно
+// тянуть мышью параллельно себе. Держится при смене видов; в 3D-модели не действует (только в кресленні).
+let cd = null, capObj = null, clipDrag = null;             // cd — разрез в работе { a, bh, b }; capObj — контур среза
+const CAP_MAT = new THREE.LineBasicMaterial({ color: 0x000000 });
+function clipApply() {
+  rend.clippingPlanes = drawOn && clipPl ? [clipPl] : [];
+  if (capObj) capObj.visible = drawOn && !!clipPl;
+  need();
+}
+// контур среза: треугольники видимых деталей ∩ плоскость (чуть к оставленной стороне, чтобы сам не отсёкся)
+function clipCaps() {
+  if (capObj) { scene.remove(capObj); capObj.geometry.dispose(); capObj = null; }
+  if (!clipPl) return;
+  root.updateMatrixWorld(true);
+  const n = clipPl.normal, out = [], A = V3(), B = V3(), C = V3(), P = [A, B, C], sh = n.clone().multiplyScalar(0.05);
+  for (const p of parts) {
+    if (p.isL || !p.g.visible) continue;
+    for (const m of p.meshes) {
+      if (!shown(m) || m.userData.mark || isGlassMesh(m)) continue;
+      const pos = m.geometry.attributes.position, idx = m.geometry.index, mw = m.matrixWorld, cnt = idx ? idx.count : pos.count;
+      for (let k = 0; k + 2 < cnt; k += 3) {
+        for (let j = 0; j < 3; j++) P[j].fromBufferAttribute(pos, idx ? idx.getX(k + j) : k + j).applyMatrix4(mw);
+        const D = P.map(q => clipPl.distanceToPoint(q) - 0.0007);
+        if ((D[0] > 0 && D[1] > 0 && D[2] > 0) || (D[0] < 0 && D[1] < 0 && D[2] < 0)) continue;
+        const X = [];
+        for (let j = 0; j < 3; j++) { const q = (j + 1) % 3; if ((D[j] < 0) !== (D[q] < 0)) X.push(P[j].clone().lerp(P[q], D[j] / (D[j] - D[q])).add(sh)); }
+        if (X.length === 2) out.push(X[0].x, X[0].y, X[0].z, X[1].x, X[1].y, X[1].z);
+      }
+    }
+  }
+  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(out, 3));
+  capObj = new THREE.LineSegments(g, CAP_MAT); capObj.renderOrder = 2; scene.add(capObj);
+  clipApply();
+}
+function clipSet(a, b, s) {
+  const t = b.clone().sub(a).normalize(), n = t.clone().cross(viewDir()).normalize().multiplyScalar(s);
+  clipPl = new THREE.Plane().setFromNormalAndCoplanarPoint(n, a);
+  clipPl.userData = { a: a.clone(), b: b.clone() };
+  clipCaps(); drawOverlay(); syncPanel();
+}
+function clipOff() { clipPl = null; clipCaps(); clipApply(); drawOverlay(); syncPanel(); }
+function clipFlip() { if (!clipPl) return; clipPl.negate(); clipCaps(); drawOverlay(); }
+// линия разреза видна на виде, где плоскость стоит ребром к взгляду
+const clipEdgeOn = () => !!clipPl && Math.abs(clipPl.normal.dot(viewDir())) < 0.02;
+function clipLine() {                                      // две точки линии на нынешнем виде: проекция сохранённых на плоскость
+  const { a, b } = clipPl.userData, pa = clipPl.projectPoint(a, V3()), pb = clipPl.projectPoint(b, V3());
+  return [pa, pb];
+}
+function clipPrims(k) {
+  const [pa, pb] = clipLine(), sc = { a: pa, b: pb, vdir: viewDir(), letter: '' };
+  // стрелки — куда смотрим (на оставленную сторону): для secPrims знак s так, чтобы n сечения совпал с нормалью плоскости
+  const t = pb.clone().sub(pa).normalize(), n0 = t.clone().cross(viewDir()).normalize();
+  sc.s = n0.dot(clipPl.normal) >= 0 ? 1 : -1;
+  return secPrims(sc, [0, 0], k, toScr, true);
+}
+function clipHover(x, y) {
+  if (!cd) cd = {};
+  if (cd.b) { hideHover(); cd.s = secSide(cd.a, cd.b, x, y); drawOverlay(); return; }
+  const s = snapDraw(x, y); showSnap(s);
+  if (cd.a) cd.bh = secStraight(cd.a, s.p);
+  drawOverlay();
+}
+function clipClick(x, y) {
+  if (!cd) cd = {};
+  if (!cd.a) { cd.a = snapDraw(x, y).p.clone(); $('st').textContent = L('h_clip2'); clipHover(x, y); return; }
+  if (!cd.b) {
+    const b = secStraight(cd.a, snapDraw(x, y).p), pa = toScr(cd.a), pb = toScr(b);
+    if (Math.hypot(pb[0] - pa[0], pb[1] - pa[1]) < 8) return;
+    cd.b = b.clone(); hideHover(); $('st').textContent = L('h_clip3'); clipHover(x, y); return;
+  }
+  const a = cd.a, b = cd.b, s = secSide(a, b, x, y);
+  cd = null; setTool(null); clipSet(a, b, s); $('st').textContent = L('h_clip4');
+}
+// тянуть линию разреза: сдвиг плоскости вдоль её нормали; контур пересчитывается, когда отпустили
+function clipDragTo(x, y, x0, y0, c0) {
+  const P = onTargetPlane(x, y), P0 = onTargetPlane(x0, y0); if (!P || !P0) return;
+  clipPl.constant = c0 - P.sub(P0).dot(clipPl.normal);
+  if (capObj) capObj.visible = false;
+  drawOverlay(); need();
+}
+// ---------- щелчковые цепочки (Алексей 06.10): габариты модулей, размеры фасадов, полезные в проёме ----------
+// Первый раз — нажать на модуль / фасад / в проём и, не отпуская, потянуть: повёл вверх-вниз — горизонтальный размер
+// (ширина), вправо-влево — вертикальный (высота); где отпустил — там линия. Дальше — просто щелчки: размер встаёт на ту
+// же линию (брать можно через один). Кнопку выключил и включил (или сменил вид) — новая цепочка.
+// Модуль меряется по габаритной рамке из Базиса (рамки стоят встык — компенсационный зазор в размер не попадает);
+// нет рамки или она не сходится с деталями — по деталям. Фасад — по своим деталям, без петель и ручек.
+let mc = null, chainSeq = 0, tChain = 0;                    // { id, axis, line } — нынешняя цепочка
+function mcReset() { mc = { id: ++chainSeq, axis: null, line: 0 }; }
+function frameBoxOf(i, u) {
+  if (!M.nfbox) return null;
+  const h = parts[i].h;
+  for (let k = h.length - 1; k >= 0; k--) {
+    const id = h[k]; if (id !== u && REP[id] !== u) continue;
+    const f = M.nfbox[id]; if (!f) continue;
+    const b = new THREE.Box3();
+    for (const x of [f[0], f[3]]) for (const y of [f[1], f[4]]) for (const z of [f[2], f[5]]) b.expandByPoint(root.localToWorld(new THREE.Vector3(x, y, z)));
+    return b;
+  }
+  return null;
+}
+// модуль — самая нижняя сборочная единица детали, у которой есть неподвижные стенки (корпус): антресоль, нижний
+// блок, шкаф целиком; ящик (TANDEM — стенки едут) пропускается, группа «Шкафы слева» — только если ниже ничего нет
+// (050_8: группа > шкаф > антресоль / нижний блок > ящики; на ручных листах цепочки — по антресолям и нижним блокам)
+function moduleOf(i) {
+  for (const u of asmChain(i)) if (partsUnder(u).some(j => isWall(j))) return u;
+  const v = parts[i].v; return v.length ? v[v.length - 1] : null;
+}
+function moduleBox(i) {
+  const u = moduleOf(i);
+  if (u === null) return null;
+  root.updateMatrixWorld(true);
+  const mb = new THREE.Box3();
+  for (const j of partsUnder(u)) { const p = parts[j]; if (p.isL || !p.g.visible) continue; for (const m of p.meshes) mb.expandByObject(m); }
+  if (mb.isEmpty()) return null;
+  const fb = frameBoxOf(i, u);
+  const name = M.names[u] || 'модуль';
+  if (fb && ['x', 'y', 'z'].every(k => Math.abs(fb.min[k] - mb.min[k]) < 60 && Math.abs(fb.max[k] - mb.max[k]) < 60)) return { b: fb, src: 'по рамке', name };
+  return { b: mb, src: 'по деталям', name };
+}
+function facadeBox(i) {
+  if (!M.door) return null;
+  const D = new Set(M.door), id = parts[i].h.find(q => D.has(q));
+  if (id === undefined) return null;
+  root.updateMatrixWorld(true);
+  const b = new THREE.Box3();
+  for (const j of partsUnder(id)) { const p = parts[j]; if (p.isF || p.isL || !p.g.visible) continue; for (const m of p.meshes) b.expandByObject(m); }
+  return b.isEmpty() ? null : { b, src: '', name: M.names[id] || 'фасад' };
+}
+// что под курсором: рамка модуля / фасада или размеры проёма (как у «полезных», только собранные)
+function pressTarget(x, y) {
+  if (drawTool === 'easy') {
+    easyCollect = [];
+    let L; try { easyPick(x, y); } finally { L = easyCollect; easyCollect = null; }
+    return L.length ? { list: L } : null;
+  }
+  const h = pick(x, y); if (!h) return null;
+  const i = h.object.userData.idx; if (parts[i].isL) return null;
+  if (drawTool === 'fac') {
+    if (hideFac) { toast('фасады спрятаны'); return null; }
+    const r = facadeBox(i); if (!r) toast('это не фасад'); return r;
+  }
+  return moduleBox(i);
+}
+// размеры цели вдоль оси ax на линии line (координата поперёк размера); выносные — от ближней к линии стороны,
+// линия внутри цели — размер прямо на ней, без выносных
+function pressDims(t, ax, line) {
+  const wk = mainAxis(perpAxis(ax));
+  if (t.b) {
+    const b = t.b, { D } = viewAxes(), zF = viewDir()[D] < 0 ? b.max[D] : b.min[D];
+    const near = Math.min(Math.max(line, b.min[wk]), b.max[wk]);
+    const P = v => { const p = V3(); p[ax] = v; p[wk] = near; p[D] = zF; return p; };
+    return [{ a: P(b.min[ax]), b: P(b.max[ax]), text: null }];
+  }
+  const ok = q => q.label !== 'штанга від підлоги';
+  const q = t.list.find(z => z.label === 'проріз' && axisOf(z.a, z.b) === ax) || t.list.find(z => ok(z) && axisOf(z.a, z.b) === ax);
+  if (!q) return [];
+  const cr = t.list.find(z => ok(z) && axisOf(z.a, z.b) === wk);
+  const lo = cr ? Math.min(cr.a[wk], cr.b[wk]) : -Infinity, hi = cr ? Math.max(cr.a[wk], cr.b[wk]) : Infinity;
+  const near = Math.min(Math.max(line, lo), hi), a = q.a.clone(), b = q.b.clone();
+  if (isFinite(near)) { a[wk] = near; b[wk] = near; }
+  return [{ a, b, text: q.text != null ? q.text : null }];
+}
+function pressPrev(t, ax, line) {
+  const out = pressDims(t, ax, line); if (!out.length) return null;
+  const w = perpAxis(ax);
+  return { a: out[0].a, b: out[0].b, axis: ax, off: w.multiplyScalar(line - out[0].a.dot(w)), text: out[0].text };
+}
+function pressCommit(t, ax, line) {
+  const out = pressDims(t, ax, line);
+  if (!out.length) { toast(ax === viewAxes().U ? 'тут нечего мерить по высоте' : 'тут нечего мерить по ширине'); return false; }
+  // тот же модуль ещё раз — второй размер поверх первого не ставим
+  const same = (d, q) => d.chain === mc.id && ((d.a.distanceTo(q.a) < 0.5 && d.b.distanceTo(q.b) < 0.5) || (d.a.distanceTo(q.b) < 0.5 && d.b.distanceTo(q.a) < 0.5));
+  const add = out.filter(q => !dims.some(d => same(d, q)));
+  const what = t.name ? t.name + ' — ' : '', len = Math.round(Math.abs(out[0].b.clone().sub(out[0].a).dot(AX[ax])));
+  if (!add.length) { $('st').textContent = what + len + ' — уже стоит'; return true; }
+  pushUndo();
+  for (const q of add) {
+    const dm = addDim(q.a, q.b, q.text != null ? { text: q.text } : null), w = perpAxis(ax);
+    dm.axis = ax; dm.off = w.multiplyScalar(line - q.a.dot(w)); dm.chain = mc.id; buildDim(dm);
+  }
+  $('st').textContent = what + (q0 => q0.text != null ? q0.text : len)(out[0]) + (t.src ? ' (' + t.src + ')' : '');
+  return true;
+}
+function pressMove(d, x, y) {
+  const p = d.press;
+  if (mc.axis !== null) return;                             // линия уже задана первым размером
+  if (!p.ax) {
+    const dx = x - d.x0, dy = y - d.y0; if (Math.hypot(dx, dy) < 6) return;
+    const { R, U } = viewAxes(); p.ax = Math.abs(dy) >= Math.abs(dx) ? R : U;
+  }
+  const P = onTargetPlane(x, y); if (!P) return;
+  p.line = P.dot(perpAxis(p.ax));
+  preview = pressPrev(p.t, p.ax, p.line); drawOverlay();
+}
+function pressUp(d) {
+  const p = d.press; preview = null;
+  if (mc.axis === null) {
+    if (!p.ax) { $('st').textContent = L('h_press'); drawOverlay(); return; }
+    if (pressCommit(p.t, p.ax, p.line)) { mc.axis = p.ax; mc.line = p.line; $('st').textContent += L('h_more'); }
+  } else pressCommit(p.t, mc.axis, mc.line);
+  drawOverlay();
+}
+// ---------- габариты: модули (сборочные единицы) видимого, выделенное по Enter ----------
+// Модули — самые верхние сборочные единицы видимых деталей (галочки Базиса; нет галочек — верхний блок).
+// Ширины модулей — цепочкой снизу, под ними общая ширина; высоты модулей — слева (одна на каждую разную высоту),
+// общая высота — справа. Отступы — 9 мм бумаги при любом масштабе. Всё — в осях вида (сбоку ширина = глубина).
+function unitBoxes() {
+  root.updateMatrixWorld(true);
+  const map = new Map();
+  parts.forEach((p, i) => {
+    if (p.isL || !p.g.visible) return;
+    const ch = asmChain(i), u = ch.length ? ch[ch.length - 1] : (p.v.length ? p.v[p.v.length - 1] : null);
+    if (u === null) return;
+    if (!map.has(u)) map.set(u, new THREE.Box3());
+    for (const m of p.meshes) map.get(u).expandByObject(m);
+  });
+  return [...map.values()].filter(b => !b.isEmpty());
+}
+function boxTools(all) {
+  const { R, U, D, rs, us } = viewAxes(), d = viewDir(), zF = d[D] < 0 ? all.max[D] : all.min[D];
+  const P = (h, v) => { const p = V3(); p[R] = h; p[U] = v; p[D] = zF; return p; };
+  const put = (a, b, offAx, offV, tag) => { if (a.distanceTo(b) < 1) return; const dm = addDim(a, b); dm.off = AX[offAx].clone().multiplyScalar(offV); dm.auto = tag; buildDim(dm); };
+  return { R, U, rs, us, P, put, lo: b => us > 0 ? b.min[U] : b.max[U], le: b => rs > 0 ? b.min[R] : b.max[R], ri: b => rs > 0 ? b.max[R] : b.min[R], g: 9 * drawN };
+}
+function autoDims() {
+  const F = flags();
+  for (const dm of dims.filter(q => q.auto && q.auto !== 'gab' && dimHere(q))) removeDim(dm);
+  if (!F.mod && !F.all) { drawOverlay(); return; }
+  const B = unitBoxes(); if (!B.length) { toast('на виде нет модулей'); return; }
+  const all = new THREE.Box3(); B.forEach(b => all.union(b));
+  const { R, U, rs, us, P, put, lo, le, ri, g } = boxTools(all), low = lo(all);
+  if (F.mod) {
+    for (const b of B) put(P(b.min[R], lo(b)), P(b.max[R], lo(b)), U, low - us * g - lo(b), 'mod');
+    const seen = [];
+    B.slice().sort((p, q) => (q.max[U] - q.min[U]) - (p.max[U] - p.min[U])).forEach(b => {
+      if (seen.some(s => Math.abs(s[0] - b.min[U]) < 1 && Math.abs(s[1] - b.max[U]) < 1)) return;
+      seen.push([b.min[U], b.max[U]]);
+      const e = le(b);
+      put(P(e, b.min[U]), P(e, b.max[U]), R, le(all) - rs * g * seen.length - e, 'mod');
+    });
+  }
+  if (F.all) {
+    put(P(all.min[R], low), P(all.max[R], low), U, -us * g * (F.mod ? 2 : 1), 'all');
+    const e = ri(all); put(P(e, all.min[U]), P(e, all.max[U]), R, rs * g, 'all');
+  }
+  drawOverlay();
+}
+function gabCommit() {
+  if (!selSet.length) { toast('выделите модули (Shift — несколько), потом Enter'); return; }
+  root.updateMatrixWorld(true);
+  const b = new THREE.Box3();
+  for (const i of selSet) { const p = parts[i]; if (!effVisible(p) || p.isL) continue; for (const m of p.meshes) b.expandByObject(m); }
+  if (b.isEmpty()) return;
+  pushUndo();
+  // размеры — снаружи всего вида (третьим рядом, за габаритами модулей и общим), выносные тянутся от выделенного
+  const all = visibleBox(false), { R, U, rs, us, P, put, lo, le, g } = boxTools(b), low = lo(b), e = le(b);
+  put(P(b.min[R], low), P(b.max[R], low), U, lo(all) - us * g * 3 - low, 'gab');
+  put(P(e, b.min[U]), P(e, b.max[U]), R, le(all) - rs * g * 3 - e, 'gab');
+  clearSel(); drawOverlay();
+}
+// ---------- Ctrl+Z / Ctrl+Y: размеры, спрятанное, фасады ----------
+const undoS = [], redoS = [];
+function stateNow() {
+  return { dims: dims.map(d => ({ a: d.a.toArray(), b: d.b.toArray(), axis: d.axis, off: d.off.toArray(), label: d.label, text: d.text, vdir: d.vdir ? d.vdir.toArray() : null, auto: d.auto, chain: d.chain, fs: d.fs })),
+           ph: parts.map(p => p.hidden ? '1' : '0').join(''), nh: Object.keys(nodes).filter(k => nodes[k].hidden), fac: hideFac, af: JSON.stringify(autoFlags),
+           secs: secs.map(q => ({ a: q.a.toArray(), b: q.b.toArray(), s: q.s, vdir: q.vdir.toArray(), fs: q.fs, letter: q.letter, sN: q.sN, rot: q.rot, pos: q.pos.slice(), pi: q.pi })) };
+}
+function pushUndo() { if (!drawOn) return; undoS.push(stateNow()); if (undoS.length > 80) undoS.shift(); redoS.length = 0; }
+function restoreState(s) {
+  selDim = null; preview = null;
+  while (dims.length) removeDim(dims[0]);
+  easyDims.length = 0; partDims.length = 0; gabDims.length = 0;
+  for (const q of s.dims) {
+    const dm = addDim(new THREE.Vector3().fromArray(q.a), new THREE.Vector3().fromArray(q.b), { label: q.label, text: q.text, fs: q.fs });
+    dm.axis = q.axis; dm.off = new THREE.Vector3().fromArray(q.off); dm.vdir = q.vdir ? new THREE.Vector3().fromArray(q.vdir) : null; dm.auto = q.auto; dm.chain = q.chain;
+    buildDim(dm);
+  }
+  parts.forEach((p, i) => { p.hidden = s.ph[i] === '1'; });
+  for (const k in nodes) nodes[k].hidden = s.nh.includes(k);
+  hideFac = s.fac; setOn('bFac', hideFac);
+  for (const k in autoFlags) delete autoFlags[k];
+  Object.assign(autoFlags, JSON.parse(s.af));
+  // сечения: тот же разрез заново по тем же деталям (рисунок не храним — он считается из модели)
+  const old = new Map(secs.map(q => [q.letter + q.a.toArray() + q.b.toArray() + q.s, q]));
+  selSec = null; secs.length = 0;
+  for (const q of s.secs || []) {
+    const sc = { a: new THREE.Vector3().fromArray(q.a), b: new THREE.Vector3().fromArray(q.b), s: q.s, vdir: new THREE.Vector3().fromArray(q.vdir), fs: q.fs,
+                 letter: q.letter, sN: q.sN, rot: q.rot, pos: q.pos.slice(), pi: q.pi };
+    const was = old.get(q.letter + q.a + q.b + q.s); if (was) { sc.G = was.G; sc.box = was.box; }
+    secs.push(sc);
+  }
+  applyVis(); renderTree(); syncPanel(); drawOverlay();
+}
+function drawUndo() { if (!undoS.length) { toast('отменять нечего'); return; } redoS.push(stateNow()); restoreState(undoS.pop()); }
+function drawRedo() { if (!redoS.length) { toast('возвращать нечего'); return; } undoS.push(stateNow()); restoreState(redoS.pop()); }
+
+const DVIEWS = { front: [0, 0], back: [Math.PI, 0], left: [-Math.PI / 2, 0], right: [Math.PI / 2, 0], top: [0, Math.PI / 2], iso: [Math.PI / 4, 0.6155] };
+// ---------- креслення: оформление как у чертёжных программ (Алексей 07.10, образец — FurniDraft) ----------
+// Сверху лента: вкладки, в них группы кнопок (значок + подпись, подпись группы снизу). Над листом — строка значков
+// с выпадающими списками; у выделенного размера — плашка действий; справа — листы зоны и предпросмотр; снизу —
+// тёмная строка-подсказка. Оформление (светлое / тёмное / синее) и язык (русский / українська) — вкладка «Настройки».
+const DS = (b, s) => `<svg viewBox="0 0 24 24" width="${s}" height="${s}" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">${b}</svg>`;
+const cube = (t, f, r) => `<polygon points="${CT}" fill="currentColor" fill-opacity="${t}"/><polygon points="${CF}" fill="currentColor" fill-opacity="${f}"/><polygon points="${CR}" fill="currentColor" fill-opacity="${r}"/>`;
+const MIR = s => `<g transform="matrix(-1 0 0 1 24 0)">${s}</g>`;
+const TXT = t => `<text x="12" y="16" text-anchor="middle" font-size="10.5" font-weight="700" font-family="system-ui,sans-serif" fill="currentColor" stroke="none">${t}</text>`;
+const DIC = {
+  front: cube(0, .6, 0), right: cube(0, 0, .6), top: cube(.6, 0, 0), left: MIR(cube(0, 0, .6)),
+  back: `<g stroke-dasharray="2 1.6">${cube(0, .22, 0)}</g>`, iso: cube(.18, .55, .32),
+  lines: '<path d="M4 7.5L12 3l8 4.5v9L12 21l-8-4.5z"/><path d="M4 7.5L12 12l8-4.5M12 12v9"/>',
+  color: '<path d="M12 3.5s6 6.6 6 10.5a6 6 0 0 1-12 0c0-3.9 6-10.5 6-10.5z" fill="currentColor" fill-opacity=".35"/>',
+  hid: '<rect x="3" y="6" width="12" height="12" stroke-width="1.8"/><path d="M9 3h12v12" stroke-dasharray="2 2" stroke-opacity=".55"/>',
+  clip: '<path d="M3 9l9-5 9 5v10l-9-4-9 4z" fill="currentColor" fill-opacity=".18"/><path d="M12 2v20" stroke-width="2" stroke-dasharray="4 2 1 2"/>',
+  clipflip: '<path d="M12 3v18" stroke-dasharray="4 2 1 2"/><path d="M8 8l-4 4 4 4M16 8l4 4-4 4"/>',
+  clipoff: '<path d="M12 3v18" stroke-dasharray="4 2 1 2"/><path d="M5 5l14 14" stroke-width="2"/>',
+  nofac: '<rect x="5" y="3" width="14" height="18" rx="1"/><path d="M15 12h1"/><path d="M3 21L21 3" stroke-width="2"/>',
+  fit: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/><rect x="9" y="9" width="6" height="6"/>',
+  showall: '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+  tree: '<circle cx="4.5" cy="7" r="1.4" fill="currentColor"/><circle cx="4.5" cy="12" r="1.4" fill="currentColor"/><circle cx="4.5" cy="17" r="1.4" fill="currentColor"/><path d="M9 7h11M9 12h11M9 17h11"/>',
+  sel: '<path d="M6 3l12 7.5-5.2 1.3 3 5.6-2.4 1.3-3-5.6L6 17z"/>',
+  lin: '<path d="M3 6v12M21 6v12M3 12h18"/><path d="M6 10l-3 2 3 2M18 10l3 2-3 2"/>',
+  chain: '<path d="M3 7v10M11 7v10M21 7v10M3 12h18"/><path d="M5.5 10.5L3 12l2.5 1.5M8.5 10.5L11 12l-2.5 1.5M13.5 10.5L11 12l2.5 1.5M18.5 10.5L21 12l-2.5 1.5"/>',
+  base: '<path d="M4 3v18"/><path d="M4 8h7M4 13h11M4 18h15"/><path d="M9 6.5L11 8l-2 1.5M13 11.5l2 1.5-2 1.5M17 16.5l2 1.5-2 1.5"/>',
+  gab: '<rect x="5" y="9" width="14" height="11"/><path d="M5 5h14M5 3.5v3M19 3.5v3"/><path d="M8 13h8M8 16h5" stroke-dasharray="1.5 1.5"/>',
+  mod: '<rect x="3" y="8" width="8" height="13"/><rect x="13" y="8" width="8" height="13"/><path d="M3 4.5h18M3 3v3M11 3v3M13 3v3M21 3v3"/>',
+  fac: '<rect x="3.5" y="8" width="7.5" height="13" rx=".6"/><rect x="13" y="8" width="7.5" height="13" rx=".6"/><path d="M9 13.5v2M15 13.5v2M3.5 4.5h17M3.5 3v3M20.5 3v3"/>',
+  easy: '<path d="M4 3v18M20 3v18M4 4h16M4 20h16M4 12h16"/><path d="M12 5.5v5M10.5 7L12 5.5 13.5 7M10.5 9L12 10.5 13.5 9"/>',
+  all: '<rect x="7" y="4" width="13" height="13"/><path d="M7 21h13M7 19.5v3M20 19.5v3M3 4v13M1.5 4h3M1.5 17h3"/>',
+  tick: '<path d="M3 12h18M4 7v10M20 7v10M2 14.5l4-5M18 14.5l4-5"/>',
+  arrow: '<path d="M3 12h18M3 7v10M21 7v10"/><path d="M3 12l4.5-2.2v4.4zM21 12l-4.5-2.2v4.4z" fill="currentColor"/>',
+  undo: '<path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/>',
+  redo: '<path d="M15 14l5-5-5-5"/><path d="M20 9H10a6 6 0 0 0 0 12h3"/>',
+  clr: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/>',
+  dia: '<circle cx="12" cy="12" r="7.5"/><path d="M6.7 17.3L17.3 6.7"/><path d="M14 6.7h3.3V10"/>',
+  rad: '<circle cx="12" cy="12" r="7.5"/><path d="M12 12l5.3-5.3"/><circle cx="12" cy="12" r=".9" fill="currentColor"/>',
+  lead: '<path d="M4 20l7-7h9"/><circle cx="4" cy="20" r="1.4" fill="currentColor"/><path d="M12 9.5h8"/>',
+  pos: '<circle cx="16" cy="8" r="5"/><path d="M3.5 20.5l8.8-8.8"/><circle cx="3.5" cy="20.5" r="1.3" fill="currentColor"/>',
+  cut: '<path d="M4 3.5h5M4 3.5v4.5M20 20.5h-5M20 20.5V16"/><path d="M4 20L20 4" stroke-dasharray="3.2 2"/>',
+  sect: '<path d="M4 8l8-4 8 4v8l-8 4-8-4z"/><path d="M4 12l8-4 8 4-8 4z" fill="currentColor" fill-opacity=".3"/>',
+  detail: '<circle cx="9" cy="9" r="5.5"/><path d="M13 13l2.5 2.5"/><rect x="15" y="15" width="6" height="6"/>',
+  svg: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4M12 10v7M9 14l3 3 3-3"/>',
+  png: '<rect x="3" y="5" width="18" height="14" rx="1"/><circle cx="8.5" cy="10" r="1.6"/><path d="M3 17l5-4 4 3 4-5 5 5"/>',
+  refresh: '<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/>',
+  th_light: '<rect x="3" y="5" width="18" height="14" rx="1.5" fill="#ffffff"/><path d="M3 9.5h18"/><rect x="5" y="11.5" width="6" height="5" fill="#d8dde3" stroke="none"/>',
+  th_dark: '<rect x="3" y="5" width="18" height="14" rx="1.5" fill="#2b2d31"/><path d="M3 9.5h18" stroke="#8a8f98"/><rect x="5" y="11.5" width="6" height="5" fill="#4c9be8" stroke="none"/>',
+  th_blue: '<rect x="3" y="5" width="18" height="14" rx="1.5" fill="#ffffff"/><path d="M3 6.5a1.5 1.5 0 0 1 1.5-1.5h15A1.5 1.5 0 0 1 21 6.5v3H3z" fill="#2b579a" stroke="#2b579a"/><rect x="5" y="11.5" width="6" height="5" fill="#2b579a" stroke="none"/>',
+  ru: TXT('Ру'), uk: TXT('Ук'),
+  exit: '<path d="M4 7.5L12 3l8 4.5v9L12 21l-8-4.5z"/><path d="M4 7.5L12 12l8-4.5M12 12v9"/>',
+  chev: '<path d="M6 9l6 6 6-6"/>', chevR: '<path d="M9 6l6 6-6 6"/>', chevL: '<path d="M15 6l-6 6 6 6"/>',
+  edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13 7l4 4"/>',
+  reset: '<path d="M4 12a8 8 0 1 0 2.3-5.7"/><path d="M4 4v5h5"/>',
+  del: '<path d="M6 6l12 12M18 6L6 18"/>',
+  delchain: '<path d="M3 9h7M14 9h7M3 6v6M10 6v6M14 6v6M21 6v6"/><path d="M8 15l8 6M16 15l-8 6"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/>',
+  dimfly: '<path d="M3 6v12M21 6v12M3 12h18"/>',
+};
+const DTXT = {
+  ru: {
+    exit: 'Модель', tab_view: 'Вид', tab_dims: 'Размеры', tab_marks: 'Обозначения', tab_sheet: 'Лист', tab_set: 'Настройки',
+    g_views: 'Виды', g_look: 'Отображение', g_fac: 'Фасады', g_scale: 'Масштаб', g_show: 'Показ',
+    g_put: 'Проставить', g_auto: 'По модели', g_ends: 'Концы', g_edit: 'Правка',
+    g_mdia: 'Отверстия', g_mlead: 'Выноски', g_mcut: 'Разрезы', g_frame: 'Кадр', g_save: 'Сохранить', g_folder: 'Папки отчёта',
+    g_theme: 'Оформление', g_lang: 'Язык',
+    front: 'Спереди', back: 'Сзади', left: 'Слева', right: 'Справа', top: 'Сверху', iso: 'Изометрия',
+    lines: 'Линии', color: 'Цвет', hid: 'Невидимые', t_hid: 'Линии за деталями — тонкие светлые, на экране и в листе SVG', nofac: 'Без фасадов',
+    g_clipg: 'Разрез вида', clip: 'Провести', clipflip: 'Развернуть', clipoff: 'Снять',
+    t_clip: 'Плоскость на всю сцену: всё по одну сторону отсекается (мебель, стены, слои). Удобно ставить на виде сверху',
+    t_clipflip: 'Оставить другую сторону', t_clipoff: 'Вернуть всё отсечённое',
+    h_clip: 'Разрез вида: первая точка линии (удобно на виде сверху)', h_clip2: 'Разрез вида: вторая точка линии (почти ровная — выпрямится)',
+    h_clip3: 'Разрез вида: щелчок с той стороны, которую оставить',
+    h_clip4: 'Разрез стоит. На виде, где он виден линией, линию можно тянуть мышью. «Развернуть» — другая сторона, «Снять» — всё вернуть', fit: 'Вписать', showall: 'Показать всё', tree: 'Структура',
+    sel: 'Выбор', lin: 'Линейный', chain: 'Цепочка', base: 'От базы', gab: 'Габаритный',
+    mod: 'Модули', fac: 'Фасады', easy: 'Проёмы', all: 'Общий габарит',
+    tick: 'Засечки', arrow: 'Стрелки', undo: 'Отменить', redo: 'Вернуть', clr: 'Стереть вид',
+    dia: 'Диаметр', rad: 'Радиус', lead: 'Выноска', pos: 'Позиции', cut: 'Разрез', sect: 'Сечение', detail: 'Местный вид',
+    svg: 'Лист SVG', png: 'Снимок PNG', refresh: 'Обновить',
+    th_light: 'Светлое', th_dark: 'Тёмное', th_blue: 'Синее', ru: 'Русский', uk: 'Українська',
+    dimfly: 'Размеры', autofly: 'Размеры по модели', endfly: 'Концы размеров', pcol: 'Свернуть / развернуть',
+    scaleAuto: 'по виду', scaleFix: 'закрепить 1:', frameName: 'название кадра', frameHint: 'так назовётся файл',
+    noScale: 'перспектива — без масштаба', fixed: 'закреплён', byView: 'по виду',
+    e_text: 'Текст', e_reset: 'Исходный', e_del: 'Удалить', e_delchain: 'Цепочку',
+    p_sheets: 'Листы зоны', p_draw: 'Листы', p_shot: 'Снимки', p_empty: 'пусто', p_prev: 'Предпросмотр',
+    p_noSrv: 'локальный сервер не отвечает', p_noZone: 'нет папки заказа — перевыгрузите проект из Базиса',
+    soon: 'будет следующим шагом',
+    idle: 'Щелчок по размеру — его действия. Левая кнопка двигает лист, колесо приближает. Ctrl+Z — отменить.',
+    n_front: 'вид спереди', n_back: 'вид сзади', n_left: 'вид слева', n_right: 'вид справа', n_top: 'вид сверху', n_iso: 'изометрия', n_nofac: ' без фасадов',
+    h_lin: 'Линейный: две точки (угол или линия), потом щелчок — куда встанет размер',
+    h_chain: 'Цепочка: две точки и место, дальше — следующие точки. Esc или правая кнопка — закончить',
+    h_base: 'От базы: база (точка или линия), вторая точка и место, дальше — следующие точки. Esc — закончить',
+    h_gab: 'Габаритный: выделите модули (Shift — несколько) и нажмите Enter',
+    h_mod: 'Модули: нажмите на модуль и потяните (вверх-вниз — ширина, вправо-влево — высота), отпустите на месте линии; дальше — щелчки по модулям',
+    h_fac: 'Фасады: нажмите на фасад и потяните (вверх-вниз — ширина, вправо-влево — высота), отпустите на месте линии; дальше — щелчки по фасадам',
+    h_easy: 'Проёмы: нажмите в проём и потяните (вправо-влево — высота, вверх-вниз — ширина), отпустите на месте линии; дальше — щелчки по проёмам',
+    h_next: 'Следующая точка. Esc или правая кнопка — закончить',
+    h_press: 'Нажмите и, не отпуская, потяните: вверх-вниз — ширина, вправо-влево — высота',
+    h_more: '. Дальше — щелчки: встанут на эту линию; новая цепочка — выключить и включить кнопку',
+    t_exit: 'Вернуться к 3D-модели', t_lines: 'Белые детали и чёрные рёбра — как на чертеже', t_color: 'Как в 3D — для снимков',
+    t_nofac: 'Спрятать двери и фасады ящиков — лист «без фасадов»', t_fit: 'Пересчитать масштаб и вписать лист в экран',
+    t_showall: 'Вернуть всё спрятанное', t_tree: 'Структура модели слева', t_sel: 'Без инструмента: щелчок выделяет деталь или размер',
+    t_all: 'Общая ширина снизу и общая высота справа — на этом виде', t_tick: 'Концы размеров — засечки 45°', t_arrow: 'Концы размеров — стрелки',
+    t_undo: 'Ctrl+Z', t_redo: 'Ctrl+Y', t_clr: 'Убрать все размеры этого вида',
+    t_svg: 'Рёбра и размеры — векторный файл в папку отчёта', t_png: 'Картинка листа, как на экране, — в папку визуализаций',
+    t_refresh: 'Перечитать, что лежит в папках отчёта', t_dimfly: 'Линейный, цепочка, от базы, габаритный',
+    t_autofly: 'Модули, фасады, проёмы', t_endfly: 'Засечки или стрелки',
+    t_sect: 'Профиль детали по линии А–А: срез со штриховкой рядом на листе, в своём масштабе',
+    h_sect: 'Сечение: первая точка линии А–А', h_sect2: 'Сечение: вторая точка линии (почти ровная — выпрямится)',
+    h_sect3: 'Сечение: щелчок с той стороны, куда смотреть', h_sect4: 'Сечение: щелчок — положить на лист. Потом щелчок по сечению — масштаб, поворот',
+    sect_empty: 'линия не пересекает ни одной детали', s_view: 'как вид', s_rot: 'Повернуть',
+  },
+  uk: {
+    exit: 'Модель', tab_view: 'Вигляд', tab_dims: 'Розміри', tab_marks: 'Позначення', tab_sheet: 'Аркуш', tab_set: 'Налаштування',
+    g_views: 'Види', g_look: 'Відображення', g_fac: 'Фасади', g_scale: 'Масштаб', g_show: 'Показ',
+    g_put: 'Проставити', g_auto: 'За моделлю', g_ends: 'Кінці', g_edit: 'Правка',
+    g_mdia: 'Отвори', g_mlead: 'Виноски', g_mcut: 'Розрізи', g_frame: 'Кадр', g_save: 'Зберегти', g_folder: 'Теки звіту',
+    g_theme: 'Оформлення', g_lang: 'Мова',
+    front: 'Спереду', back: 'Ззаду', left: 'Зліва', right: 'Справа', top: 'Згори', iso: 'Ізометрія',
+    lines: 'Лінії', color: 'Колір', hid: 'Невидимі', t_hid: 'Лінії за деталями — тонкі світлі, на екрані й в аркуші SVG', nofac: 'Без фасадів',
+    g_clipg: 'Розріз виду', clip: 'Провести', clipflip: 'Розвернути', clipoff: 'Зняти',
+    t_clip: 'Площина на всю сцену: все з одного боку відсікається (меблі, стіни, шари). Зручно ставити на виді згори',
+    t_clipflip: 'Залишити інший бік', t_clipoff: 'Повернути все відсічене',
+    h_clip: 'Розріз виду: перша точка лінії (зручно на виді згори)', h_clip2: 'Розріз виду: друга точка лінії (майже рівна — випрямиться)',
+    h_clip3: 'Розріз виду: клік з того боку, який залишити',
+    h_clip4: 'Розріз стоїть. На виді, де він видно лінією, лінію можна тягнути мишею. «Розвернути» — інший бік, «Зняти» — все повернути', fit: 'Вписати', showall: 'Показати все', tree: 'Структура',
+    sel: 'Вибір', lin: 'Лінійний', chain: 'Ланцюжок', base: 'Від бази', gab: 'Габаритний',
+    mod: 'Модулі', fac: 'Фасади', easy: 'Прорізи', all: 'Загальний габарит',
+    tick: 'Засічки', arrow: 'Стрілки', undo: 'Скасувати', redo: 'Повернути', clr: 'Стерти вид',
+    dia: 'Діаметр', rad: 'Радіус', lead: 'Виноска', pos: 'Позиції', cut: 'Розріз', sect: 'Переріз', detail: 'Місцевий вид',
+    svg: 'Аркуш SVG', png: 'Знімок PNG', refresh: 'Оновити',
+    th_light: 'Світле', th_dark: 'Темне', th_blue: 'Синє', ru: 'Русский', uk: 'Українська',
+    dimfly: 'Розміри', autofly: 'Розміри за моделлю', endfly: 'Кінці розмірів', pcol: 'Згорнути / розгорнути',
+    scaleAuto: 'за видом', scaleFix: 'закріпити 1:', frameName: 'назва кадру', frameHint: 'так називатиметься файл',
+    noScale: 'перспектива — без масштабу', fixed: 'закріплено', byView: 'за видом',
+    e_text: 'Текст', e_reset: 'Початковий', e_del: 'Видалити', e_delchain: 'Ланцюжок',
+    p_sheets: 'Аркуші зони', p_draw: 'Аркуші', p_shot: 'Знімки', p_empty: 'порожньо', p_prev: 'Попередній перегляд',
+    p_noSrv: 'локальний сервер не відповідає', p_noZone: 'немає теки замовлення — перевивантажте проєкт з Базиса',
+    soon: 'буде наступним кроком',
+    idle: 'Клік по розміру — його дії. Ліва кнопка рухає аркуш, коліщатко наближає. Ctrl+Z — скасувати.',
+    n_front: 'вигляд спереду', n_back: 'вигляд ззаду', n_left: 'вигляд зліва', n_right: 'вигляд справа', n_top: 'вигляд згори', n_iso: 'ізометрія', n_nofac: ' без фасадів',
+    h_lin: 'Лінійний: дві точки (кут або лінія), потім клік — де стане розмір',
+    h_chain: 'Ланцюжок: дві точки і місце, далі — наступні точки. Esc або права кнопка — завершити',
+    h_base: 'Від бази: база (точка або лінія), друга точка і місце, далі — наступні точки. Esc — завершити',
+    h_gab: 'Габаритний: виділіть модулі (Shift — кілька) і натисніть Enter',
+    h_mod: 'Модулі: натисніть на модуль і потягніть (вгору-вниз — ширина, вправо-вліво — висота), відпустіть на місці лінії; далі — кліки по модулях',
+    h_fac: 'Фасади: натисніть на фасад і потягніть (вгору-вниз — ширина, вправо-вліво — висота), відпустіть на місці лінії; далі — кліки по фасадах',
+    h_easy: 'Прорізи: натисніть у проріз і потягніть (вправо-вліво — висота, вгору-вниз — ширина), відпустіть на місці лінії; далі — кліки по прорізах',
+    h_next: 'Наступна точка. Esc або права кнопка — завершити',
+    h_press: 'Натисніть і, не відпускаючи, потягніть: вгору-вниз — ширина, вправо-вліво — висота',
+    h_more: '. Далі — кліки: стануть на цю лінію; новий ланцюжок — вимкнути й увімкнути кнопку',
+    t_exit: 'Повернутися до 3D-моделі', t_lines: 'Білі деталі й чорні ребра — як на кресленні', t_color: 'Як у 3D — для знімків',
+    t_nofac: 'Сховати двері й фасади шухляд — аркуш «без фасадів»', t_fit: 'Перерахувати масштаб і вписати аркуш в екран',
+    t_showall: 'Повернути все сховане', t_tree: 'Структура моделі зліва', t_sel: 'Без інструмента: клік виділяє деталь або розмір',
+    t_all: 'Загальна ширина знизу й загальна висота справа — на цьому виді', t_tick: 'Кінці розмірів — засічки 45°', t_arrow: 'Кінці розмірів — стрілки',
+    t_undo: 'Ctrl+Z', t_redo: 'Ctrl+Y', t_clr: 'Прибрати всі розміри цього виду',
+    t_svg: 'Ребра й розміри — векторний файл у теку звіту', t_png: 'Картинка аркуша, як на екрані, — у теку візуалізацій',
+    t_refresh: 'Перечитати, що лежить у теках звіту', t_dimfly: 'Лінійний, ланцюжок, від бази, габаритний',
+    t_autofly: 'Модулі, фасади, прорізи', t_endfly: 'Засічки або стрілки',
+    t_sect: 'Профіль деталі по лінії А–А: зріз зі штрихуванням поруч на аркуші, у своєму масштабі',
+    h_sect: 'Переріз: перша точка лінії А–А', h_sect2: 'Переріз: друга точка лінії (майже рівна — випрямиться)',
+    h_sect3: 'Переріз: клік з того боку, куди дивитися', h_sect4: 'Переріз: клік — покласти на аркуш. Потім клік по перерізу — масштаб, поворот',
+    sect_empty: 'лінія не перетинає жодної деталі', s_view: 'як вид', s_rot: 'Повернути',
+  },
+};
+const keep = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
+const kept = (k, d) => { try { return localStorage.getItem(k) || d; } catch (e) { return d; } };
+let dLang = kept('drawLang', 'ru'), dTheme = kept('drawTheme', 'light'), ribTab = kept('drawTab', 'dims');
+let frameName = 'вид спереди', lastDim = 'lin', lastAuto = 'mod', flyFor = null, ctxFor = null, ctxEdit = false;
+const L = k => (DTXT[dLang] && DTXT[dLang][k]) || DTXT.ru[k] || k;
+// какой строгий вид сейчас (для подсветки кнопки и строки внизу)
+function curView() {
+  if (!view.strict) return '';
+  const d = (a, b) => Math.abs(Math.atan2(Math.sin(a - b), Math.cos(a - b)));
+  for (const k in DVIEWS) if (d(DVIEWS[k][0], view.yaw) < 1e-3 && Math.abs(DVIEWS[k][1] - view.pitch) < 1e-3) return k;
+  return '';
+}
+function setView(k) {
+  const [y, p] = DVIEWS[k]; selDim = null; endTool(); strictView(y, p);
+  frameName = L('n_' + k) + (hideFac ? L('n_nofac') : ''); const nm = $('dName'); if (nm) nm.value = frameName;
+}
+function setLook(on) { drawLines = on; applyLook(); if (drawLines && !view.strict) strictView(0, 0); need(); }
+const isT = t => () => drawTool === t;
+const pickT = t => () => { if (PRESS.has(t)) lastAuto = t; else lastDim = t; setTool(drawTool === t ? null : t); };
+const soon = { act: () => toast(L('soon')), dis: () => true };
+const DCMD = {
+  exit: { act: () => setDraw(false) },
+  front: { act: () => setView('front'), on: () => curView() === 'front' }, back: { act: () => setView('back'), on: () => curView() === 'back' },
+  left: { act: () => setView('left'), on: () => curView() === 'left' }, right: { act: () => setView('right'), on: () => curView() === 'right' },
+  top: { act: () => setView('top'), on: () => curView() === 'top' }, iso: { act: () => setView('iso'), on: () => curView() === 'iso', show: () => !drawLines },
+  lines: { act: () => setLook(true), on: () => drawLines }, color: { act: () => setLook(false), on: () => !drawLines },
+  clip: { act: () => setTool(drawTool === 'clip' ? null : 'clip'), on: isT('clip') },
+  clipflip: { act: () => clipFlip(), dis: () => !clipPl }, clipoff: { act: () => clipOff(), dis: () => !clipPl },
+  hid: { act: () => { drawHid = !drawHid; keep('drawHid', drawHid ? '1' : '0'); applyLook(); need(); }, on: () => drawHid, show: () => drawLines },
+  nofac: { act: () => $('bFac').onclick(), on: () => hideFac, show: () => !!(M.door && M.door.length) },
+  fit: { act: () => fitSheet() }, showall: { act: () => showAll() }, tree: { act: () => setTree(!treeOpen()), on: () => treeOpen() },
+  sel: { act: () => setTool(null), on: () => !drawTool },
+  lin: { act: pickT('lin'), on: isT('lin') }, chain: { act: pickT('chain'), on: isT('chain') },
+  base: { act: pickT('base'), on: isT('base') }, gab: { act: pickT('gab'), on: isT('gab') },
+  mod: { act: pickT('mod'), on: isT('mod') }, fac: { act: pickT('fac'), on: isT('fac') }, easy: { act: pickT('easy'), on: isT('easy') },
+  all: { act: () => { pushUndo(); const F = flags(); F.all = !F.all; autoDims(); }, on: () => flags().all },
+  tick: { act: () => setEnd('tick'), on: () => dimEnd === 'tick' }, arrow: { act: () => setEnd('arrow'), on: () => dimEnd === 'arrow' },
+  undo: { act: () => drawUndo(), dis: () => !undoS.length }, redo: { act: () => drawRedo(), dis: () => !redoS.length },
+  clr: { act: () => { pushUndo(); for (const dm of dims.filter(dimHere)) removeDim(dm); for (const q of secs.filter(secHere)) secs.splice(secs.indexOf(q), 1); const F = flags(); F.mod = F.all = false; selDim = selSec = null; drawOverlay(); } },
+  sect: { act: () => setTool(drawTool === 'sect' ? null : 'sect'), on: isT('sect') },
+  dia: soon, rad: soon, lead: soon, pos: soon, cut: soon, detail: soon,
+  svg: { act: () => saveSheet() }, png: { act: () => saveShot() }, refresh: { act: () => refreshList() },
+  th_light: { act: () => setTheme('light'), on: () => dTheme === 'light' }, th_dark: { act: () => setTheme('dark'), on: () => dTheme === 'dark' },
+  th_blue: { act: () => setTheme('blue'), on: () => dTheme === 'blue' },
+  ru: { act: () => setLang('ru'), on: () => dLang === 'ru' }, uk: { act: () => setLang('uk'), on: () => dLang === 'uk' },
+};
+function setEnd(e) { dimEnd = e; keep('drawDimEnd', e); drawOverlay(); }
+function setTheme(t) { dTheme = t; keep('drawTheme', t); document.documentElement.dataset.dtheme = t; }
+function setLang(l) {
+  dLang = l; keep('drawLang', l);
+  const cv0 = curView(); if (cv0) frameName = L('n_' + cv0) + (hideFac ? L('n_nofac') : '');
+  ctxFor = null; renderPanel(); placeCtx(); if (drawTool) $('st').textContent = L('h_' + drawTool);   // плашка размера — тоже на новом языке
+}
+// вкладка → группы: [подпись группы, вид кнопок ('big' — значок над подписью, 'sm' — строчкой, столбиком по три), кнопки]
+const RIB = {
+  view: [['views', 'sm', ['front', 'back', 'left', 'right', 'top', 'iso']], ['look', 'big', ['lines', 'color', 'hid']], ['fac', 'big', ['nofac']],
+         ['clipg', 'big', ['clip', 'clipflip', 'clipoff']],
+         ['scale', 'scale'], ['show', 'big', ['showall', 'tree']]],
+  dims: [['put', 'big', ['sel', 'lin', 'chain', 'base', 'gab']], ['auto', 'big', ['mod', 'fac', 'easy', 'all']], ['ends', 'sm', ['tick', 'arrow']],
+         ['edit', 'sm', ['undo', 'redo', 'clr']]],
+  marks: [['mdia', 'big', ['dia', 'rad']], ['mlead', 'big', ['lead', 'pos']], ['mcut', 'big', ['cut', 'sect', 'detail']]],
+  sheet: [['frame', 'frame'], ['save', 'big', ['svg', 'png']], ['folder', 'big', ['refresh']]],
+  set: [['theme', 'big', ['th_light', 'th_dark', 'th_blue']], ['lang', 'big', ['ru', 'uk']]],
+};
+const FLY = { dimfly: ['lin', 'chain', 'base', 'gab'], autofly: ['mod', 'fac', 'easy'], endfly: ['tick', 'arrow'] };
+const ribBtn = (id, sz) => `<button class="rb ${sz}" data-c="${id}" data-tip="${id}">${DS(DIC[id] || '', sz === 'big' ? 26 : 16)}<span>${L(id)}</span></button>`;
+function renderRibbon() {
+  const r = $('drib'), groups = RIB[ribTab] || RIB.dims;
+  let h = `<div class="rtabs"><button class="rfile" data-c="exit" data-tip="exit">${DS(DIC.exit, 16)}<span>${L('exit')}</span></button>`;
+  for (const t in RIB) h += `<button class="rtab${t === ribTab ? ' on' : ''}" data-tab="${t}">${L('tab_' + t)}</button>`;
+  h += '<span class="rzone"></span></div><div class="rbody">';
+  for (const [g, kind, items] of groups) {
+    let inner;
+    if (kind === 'scale') inner = '<div class="rinput"><select id="dScale"></select><small id="dScaleNow"></small></div>' + ribBtn('fit', 'big');
+    else if (kind === 'frame') inner = `<div class="rinput"><input id="dName" placeholder="${L('frameName')}"><small>${L('frameHint')}</small></div>`;
+    else inner = items.map(id => ribBtn(id, kind)).join('');
+    h += `<div class="rgrp"><div class="ritems${kind === 'sm' ? ' sm' : ''}">${inner}</div><div class="rgl">${L('g_' + g)}</div></div>`;
+  }
+  r.innerHTML = h + '</div>';
+  r.querySelector('.rzone').textContent = LOCAL ? LOCAL.zone : '';
+  r.querySelectorAll('[data-tab]').forEach(b => { b.onclick = () => { ribTab = b.dataset.tab; keep('drawTab', ribTab); renderRibbon(); syncPanel(); }; });
+  const sel = $('dScale');
+  if (sel) {
+    sel.innerHTML = `<option value="0">${L('scaleAuto')}</option>` + SCALES.map(s => `<option value="${s}">${L('scaleFix')}${s}</option>`).join('');
+    sel.value = String(drawFix); sel.onchange = () => { drawFix = +sel.value; fitSheet(); };
+  }
+  const nm = $('dName');
+  if (nm) { nm.value = frameName; nm.oninput = () => { frameName = nm.value; }; nm.onkeydown = e => { if (e.key === 'Enter') saveSheet(); }; }
+}
+function renderStrip() {
+  const sb = id => `<button class="sb" data-c="${id}" data-tip="${id}">${DS(DIC[id], 20)}</button>`;
+  const fb = f => `<button class="sb fl" data-fly="${f}" data-tip="${f}"><span class="fi"></span>${DS(DIC.chev, 10)}</button>`;
+  const s = $('dstrip');
+  s.innerHTML = sb('sel') + fb('dimfly') + fb('autofly') + sb('all') + '<i class="sep"></i>' + sb('undo') + sb('redo') +
+    '<i class="sep"></i>' + fb('endfly') + sb('nofac') + '<i class="sep"></i>' + sb('lines') + sb('color') + sb('hid') + sb('fit');
+  s.querySelectorAll('[data-fly]').forEach(b => { b.onclick = e => { e.stopPropagation(); openFly(b); }; });
+}
+function openFly(b) {
+  const el = $('dfly');
+  if (flyFor === b) { closeFly(); return; }
+  flyFor = b;
+  el.innerHTML = FLY[b.dataset.fly].map(id => `<button data-c="${id}" class="${DCMD[id].on() ? 'on' : ''}">${DS(DIC[id], 18)}<span>${L(id)}</span></button>`).join('');
+  el.classList.add('show');
+  const r = b.getBoundingClientRect();
+  el.style.left = Math.max(6, Math.min(innerWidth - el.offsetWidth - 6, r.left)) + 'px'; el.style.top = (r.bottom + 4) + 'px';
+}
+function closeFly() { flyFor = null; const el = $('dfly'); if (el) el.classList.remove('show'); }
+function renderSide() {
+  const d = $('dpanel');
+  d.innerHTML = `<div class="ph"><span>${L('p_sheets')}</span><button class="pcol" data-tip="pcol">${DS(DIC[d.classList.contains('col') ? 'chevL' : 'chevR'], 14)}</button></div>
+    <div class="pz"></div><div id="dList"></div>
+    <div class="ph2">${L('p_prev')}</div><div class="pthumb"><canvas id="dthumb" width="400" height="283"></canvas></div>`;
+  d.querySelector('.pz').textContent = LOCAL ? LOCAL.zone : L('p_noZone');
+  d.querySelector('.pcol').onclick = () => { d.classList.toggle('col'); renderSide(); refreshList(); layout(); fitView(); };
+}
+function renderPanel() {
+  document.documentElement.dataset.dtheme = dTheme;
+  renderRibbon(); renderStrip(); renderSide();
+  $('st').dataset.idle = L('idle');
+  syncPanel(); refreshList();
+}
+// состояние кнопок: нажата, недоступна, спрятана; значок выпадающей кнопки — выбранный в ней инструмент
+function syncPanel() {
+  if (!drawOn || !$('drib').firstChild) return;
+  for (const b of document.querySelectorAll('#drib [data-c], #dstrip [data-c]')) {
+    const c = DCMD[b.dataset.c]; if (!c) continue;
+    b.classList.toggle('on', !!(c.on && c.on()));
+    b.classList.toggle('dis', !!(c.dis && c.dis()));
+    b.style.display = c.show && !c.show() ? 'none' : '';
+  }
+  for (const b of document.querySelectorAll('#dstrip [data-fly]')) {
+    const f = b.dataset.fly, cur = FLY[f].find(id => DCMD[id].on());
+    b.querySelector('.fi').innerHTML = DS(DIC[cur || (f === 'dimfly' ? lastDim : f === 'autofly' ? lastAuto : 'tick')], 20);
+    b.classList.toggle('on', !!cur && f !== 'endfly');
+  }
+  const sel = $('dScale'); if (sel) sel.value = String(drawFix);
+  drawInfo();
+}
+// плашка у выделенного размера: текст, исходное число, удалить размер / всю его цепочку
+function placeCtx() {
+  const el = $('dctx'); if (!el) return;
+  const sc = drawOn && selSec && secs.includes(selSec) && secHere(selSec) ? selSec : null;
+  if (sc) {                                                 // плашка сечения: масштаб, повернуть, удалить
+    if (ctxFor !== sc) {
+      ctxFor = sc;
+      const it = SEC_SCALES.map(n => [String(n), '1:' + fmtN(n), sc.sN === n]).concat([['0', L('s_view'), !sc.sN], ['rot', L('s_rot')], ['del', L('e_del')]]);
+      el.innerHTML = it.map(([k, t, on]) => `<button data-x="${k}" class="${on ? 'on' : ''}">${k === 'rot' ? DS(DIC.refresh, 18) : k === 'del' ? DS(DIC.del, 18) : ''}<span>${t}</span></button>`).join('');
+      el.querySelectorAll('[data-x]').forEach(b => { b.onclick = e => { e.stopPropagation(); secAct(b.dataset.x, sc); }; });
+    }
+    el.classList.add('show');
+    const g = secPrims(sc, toScr(sheetC), pxPerPaper(), toScr), w = el.offsetWidth, h = el.offsetHeight;
+    let y = g.box[3] + 14; if (y + h > barTop() - 6) y = g.box[1] - h - 40;
+    el.style.left = Math.max(6, Math.min(innerWidth - w - 6, (g.box[0] + g.box[2]) / 2 - w / 2)) + 'px';
+    el.style.top = Math.max(ribBottom() + 4, y) + 'px';
+    return;
+  }
+  const dm = drawOn && selDim && dims.includes(selDim) && dimHere(selDim) ? selDim : null;
+  const g = dm && dimPrims(dm, toScr, pxPerPaper());
+  if (!g) { el.classList.remove('show'); ctxFor = null; ctxEdit = false; return; }
+  if (ctxFor !== dm) { ctxFor = dm; ctxEdit = false; ctxFill(dm, g); }
+  el.classList.add('show');
+  const w = el.offsetWidth, h = el.offsetHeight;
+  let y = g.tp[1] + 20; if (y + h > barTop() - 6) y = g.tp[1] - h - 28;
+  el.style.left = Math.max(6, Math.min(innerWidth - w - 6, g.tp[0] - w / 2)) + 'px';
+  el.style.top = Math.max(ribBottom() + 4, y) + 'px';
+}
+function ctxFill(dm, g) {
+  const el = $('dctx');
+  if (ctxEdit) {
+    el.innerHTML = '<input id="dctxIn">';
+    const i = $('dctxIn'); i.value = g ? g.txt : (dm.text != null ? dm.text : '');
+    i.onkeydown = e => {
+      e.stopPropagation();
+      if (e.key === 'Enter') { pushUndo(); const v = i.value.trim(); dm.text = v === '' ? null : v; ctxEdit = false; ctxFill(dm); drawOverlay(); }
+      if (e.key === 'Escape') { ctxEdit = false; ctxFill(dm); drawOverlay(); }
+    };
+    setTimeout(() => { i.focus(); i.select(); });
+    return;
+  }
+  const it = [['e_text', 'edit'], dm.text != null ? ['e_reset', 'reset'] : null, ['e_del', 'del'], dm.chain ? ['e_delchain', 'delchain'] : null].filter(Boolean);
+  el.innerHTML = it.map(([k, ic]) => `<button data-x="${k}">${DS(DIC[ic], 18)}<span>${L(k)}</span></button>`).join('');
+  el.querySelectorAll('[data-x]').forEach(b => { b.onclick = e => { e.stopPropagation(); ctxAct(b.dataset.x, dm); }; });
+}
+function ctxAct(k, dm) {
+  if (k === 'e_text') { ctxEdit = true; ctxFill(dm, dimPrims(dm, toScr, pxPerPaper())); placeCtx(); return; }
+  pushUndo();
+  if (k === 'e_reset') { dm.text = null; ctxFill(dm); }
+  if (k === 'e_del') removeDim(dm);
+  if (k === 'e_delchain') for (const o of dims.filter(o => o.chain === dm.chain && dimHere(o))) removeDim(o);
+  drawOverlay(); syncPanel();
+}
+function placeStrip() {
+  const s = $('dstrip'), t = $('tree');
+  const x0 = treeOpen() ? t.offsetWidth : 0, x1 = innerWidth - $('dpanel').offsetWidth;
+  s.style.top = (ribBottom() + 8) + 'px';
+  s.style.left = Math.max(x0 + 8, (x0 + x1) / 2 - s.offsetWidth / 2) + 'px';
+}
+// предпросмотр листа справа: копия нарисованного кадра, не чаще трёх раз в секунду
+let thumbT = 0, thumbTm = null;
+function drawThumb() {
+  const c = $('dthumb'); if (!c || !sheetC) return;
+  const S = sheetRect(), pr = rend.getPixelRatio(), g = c.getContext('2d');
+  g.fillStyle = '#ffffff'; g.fillRect(0, 0, c.width, c.height);
+  try { g.drawImage(rend.domElement, S.x0 * pr, S.y0 * pr, S.w * pr, S.h * pr, 0, 0, c.width, c.height); } catch (e) {}
+}
+function thumbTick() {
+  const t = performance.now();
+  if (t - thumbT > 350) { thumbT = t; drawThumb(); }
+  else if (!thumbTm) thumbTm = setTimeout(() => { thumbTm = null; need(); }, 400);
+}
+// щелчки по кнопкам ленты / строки / списков, всплывающие подсказки, закрытие списка щелчком мимо
+function wireDraw() {
+  $('dstat').innerHTML = `<span class="si">${DS(DIC.info, 15)}</span><span class="sr"></span>`;
+  document.addEventListener('click', e => {
+    const b = e.target.closest('#drib [data-c], #dstrip [data-c], #dfly [data-c]'); if (!b) return;
+    const c = DCMD[b.dataset.c]; if (!c) return;
+    closeFly(); c.act(); syncPanel();
+  });
+  document.addEventListener('pointerdown', e => {
+    $('dtip').classList.remove('show');
+    if (flyFor && !e.target.closest('#dfly') && !e.target.closest('[data-fly]')) closeFly();
+  }, true);
+  let tt = null;
+  document.addEventListener('pointerover', e => {
+    const b = drawOn && e.target.closest('[data-tip]'); clearTimeout(tt);
+    if (!b) { $('dtip').classList.remove('show'); return; }
+    tt = setTimeout(() => showTip(b), 280);
+  });
+}
+function showTip(b) {
+  const el = $('dtip'), id = b.dataset.tip, c = DCMD[id];
+  const sub = c && c.dis && c.dis() && c === soon ? L('soon') : (DTXT[dLang]['t_' + id] || DTXT.ru['t_' + id] || DTXT[dLang]['h_' + id] || '');
+  el.innerHTML = '<b></b>' + (sub ? '<span></span>' : '');
+  el.firstChild.textContent = L(id); if (sub) el.lastChild.textContent = sub;
+  el.classList.add('show');
+  const r = b.getBoundingClientRect(), w = el.offsetWidth;
+  el.style.left = Math.max(6, Math.min(innerWidth - w - 6, r.left + r.width / 2 - w / 2)) + 'px';
+  el.style.top = (r.bottom + 6) + 'px';
+}
+// ---------- лист SVG ----------
+function buildSVG() {
+  for (const p of parts) if (p.isF) drawEdgesFor(p);
+  root.updateMatrixWorld(true); cam.updateMatrixWorld();
+  // камера листа: тот же ракурс, кадр ровно по листу, глубина — по видимому
+  const camD = new THREE.OrthographicCamera();
+  camD.position.copy(cam.position); camD.quaternion.copy(cam.quaternion); camD.updateMatrixWorld();
+  const inv = camD.matrixWorldInverse, q0 = sheetC.clone().applyMatrix4(inv), hw = SHEET_W * drawN / 2, hh = SHEET_H * drawN / 2;
+  camD.left = q0.x - hw; camD.right = q0.x + hw; camD.top = q0.y + hh; camD.bottom = q0.y - hh;
+  const vb = visibleBox(false); let z0 = Infinity, z1 = -Infinity;
+  for (const x of [vb.min.x, vb.max.x]) for (const y of [vb.min.y, vb.max.y]) for (const z of [vb.min.z, vb.max.z]) {
+    const q = new THREE.Vector3(x, y, z).applyMatrix4(inv); z0 = Math.min(z0, q.z); z1 = Math.max(z1, q.z);
+  }
+  camD.near = -z1 - 50; camD.far = -z0 + 50; camD.updateProjectionMatrix();
+  // глубина кадра: только сами детали (рёбра, размеры, подсветки и стекло — не закрывают)
+  const RW = 4096, RH = Math.round(RW * SHEET_H / SHEET_W);
+  const rt = new THREE.WebGLRenderTarget(RW, RH), hid = [];
+  scene.traverse(o => {
+    if (!o.visible) return;
+    if (o.isLine || o.isPoints || (o.isMesh && (o.userData.idx === undefined || isGlassMesh(o)))) { o.visible = false; hid.push(o); }
+  });
+  const ov = scene.overrideMaterial, cc = rend.getClearColor(new THREE.Color()), ca = rend.getClearAlpha();
+  scene.overrideMaterial = DEPTH_MAT;
+  rend.setRenderTarget(rt); rend.setClearColor(0xffffff, 1); rend.clear(); rend.render(scene, camD);
+  const px = new Uint8Array(RW * RH * 4); rend.readRenderTargetPixels(rt, 0, 0, RW, RH, px);
+  rend.setRenderTarget(null); rend.setClearColor(cc, ca); scene.overrideMaterial = ov;
+  for (const o of hid) o.visible = true;
+  rt.dispose(); need();
+  const Z = new Float32Array(RW * RH);
+  for (let k = 0; k < RW * RH; k++) Z[k] = (px[4 * k] * 65536 + px[4 * k + 1] * 256 + px[4 * k + 2]) / 16777215;
+  // ребро видно в точке, если оно не глубже самой дальней из 4 ближайших точек кадра (+1,5 мм)
+  const eps = 1.5 / (camD.far - camD.near);
+  const zAt = (x, y) => (x < 0 || y < 0 || x >= RW || y >= RH) ? -1 : Z[(RH - 1 - y) * RW + x];
+  const visAt = (fx, fy, z) => {
+    const x = Math.floor(fx - 0.5), y = Math.floor(fy - 0.5); let mx = -1;
+    for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) { const v = zAt(x + dx, y + dy); if (v > mx) mx = v; }
+    return mx >= 0 && z <= mx + eps;
+  };
+  const out = [], outH = [], kx = SHEET_W / RW, ky = SHEET_H / RH;   // outH — невидимые (за деталью): тонкие серые
+  const seg = (a, b) => {
+    if ((a.z < -1 && b.z < -1) || (a.z > 1 && b.z > 1)) return;
+    const ax = (a.x + 1) / 2 * RW, ay = (1 - a.y) / 2 * RH, bx = (b.x + 1) / 2 * RW, by = (1 - b.y) / 2 * RH;
+    const az = (a.z + 1) / 2, bz = (b.z + 1) / 2, L = Math.hypot(bx - ax, by - ay);
+    if (L < 0.5 || Math.max(ax, bx) < 0 || Math.min(ax, bx) > RW || Math.max(ay, by) < 0 || Math.min(ay, by) > RH) return;
+    const n = Math.max(1, Math.ceil(L)), v = new Uint8Array(n + 1);
+    for (let s = 0; s <= n; s++) { const t = s / n; v[s] = visAt(ax + (bx - ax) * t, ay + (by - ay) * t, az + (bz - az) * t) ? 1 : 0; }
+    for (let s = 1; s < n; s++) if (v[s - 1] === v[s + 1] && v[s] !== v[s - 1]) v[s] = v[s - 1];   // одиночные выбросы
+    for (const [want, dst] of drawHid ? [[1, out], [0, outH]] : [[1, out]]) {
+      let s0 = -1;
+      for (let s = 0; s <= n + 1; s++) {
+        const on = s <= n && v[s] === want;
+        if (on && s0 < 0) s0 = s;
+        else if (!on && s0 >= 0) {
+          if (s - 1 > s0) { const t0 = s0 / n, t1 = (s - 1) / n; dst.push([(ax + (bx - ax) * t0) * kx, (ay + (by - ay) * t0) * ky, (ax + (bx - ax) * t1) * kx, (ay + (by - ay) * t1) * ky]); }
+          s0 = -1;
+        }
+      }
+    }
+  };
+  const A = new THREE.Vector3(), B = new THREE.Vector3();
+  const lines = ln => {
+    const pos = ln.geometry.attributes.position, mw = ln.matrixWorld;
+    for (let i = 0; i + 1 < pos.count; i += 2) {
+      A.fromBufferAttribute(pos, i).applyMatrix4(mw); B.fromBufferAttribute(pos, i + 1).applyMatrix4(mw);
+      if (clipPl && ln !== capObj) {                        // разрез вида: отсечённая часть ребра на лист не идёт
+        const da = clipPl.distanceToPoint(A), db = clipPl.distanceToPoint(B);
+        if (da < 0 && db < 0) continue;
+        if (da < 0) A.lerp(B, da / (da - db)); else if (db < 0) B.lerp(A, db / (db - da));
+      }
+      seg(A.project(camD), B.project(camD));
+    }
+  };
+  for (const p of parts) {
+    if (!p.g.visible) continue;
+    if (p.isL) { p.g.traverse(o => { if (o.isLineSegments) lines(o); }); continue; }
+    for (const ln of p.edges) if (ln.visible) lines(ln);
+    if (p.isF) for (const ln of p.dEdges) lines(ln);
+  }
+  if (capObj && capObj.visible) lines(capObj);              // контур среза разреза вида
+  // размеры: тем же рисунком, что на экране, в мм бумаги
+  const P2 = v => { const q = v.clone().project(camD); return [(q.x + 1) / 2 * SHEET_W, (1 - q.y) / 2 * SHEET_H]; };
+  let ds = '', nd = 0;
+  if (dimsShown) for (const dm of dims) { if (!dimHere(dm)) continue; const g = dimPrims(dm, P2, 1); if (g) { ds += dimSvg(g, 1, { exp: true }); nd++; } }
+  let ss = ''; for (const sc of secs) if (secHere(sc)) ss += secSvg(secPrims(sc, [SHEET_W / 2, SHEET_H / 2], 1, P2), 1, { exp: true });
+  const f2 = v => String(Math.round(v * 100) / 100), paths = [];
+  for (let k = 0; k < out.length; k += 1500) paths.push(out.slice(k, k + 1500).map(q => 'M' + f2(q[0]) + ' ' + f2(q[1]) + 'L' + f2(q[2]) + ' ' + f2(q[3])).join(''));
+  const pathsH = [];
+  for (let k = 0; k < outH.length; k += 1500) pathsH.push(outH.slice(k, k + 1500).map(q => 'M' + f2(q[0]) + ' ' + f2(q[1]) + 'L' + f2(q[2]) + ' ' + f2(q[3])).join(''));
+  console.log('лист: рёбер на листе ' + out.length + ', размеров ' + nd + ', масштаб 1:' + fmtN(drawN));
+  return '<?xml version="1.0" encoding="UTF-8"?>\n' +
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${SHEET_W}mm" height="${SHEET_H}mm" viewBox="0 0 ${SHEET_W} ${SHEET_H}">\n` +
+    (pathsH.length ? '<g id="nevidimye" fill="none" stroke="#a9b1ba" stroke-width="0.13" stroke-linecap="round">\n' + pathsH.map(d => `<path d="${d}"/>`).join('\n') + '\n</g>\n' : '') +
+    '<g id="detali" fill="none" stroke="#000000" stroke-width="0.3" stroke-linecap="round">\n' + paths.map(d => `<path d="${d}"/>`).join('\n') + '\n</g>\n' +
+    (ds ? `<g id="razmery">${ds}</g>\n` : '') + (ss ? `<g id="secheniya">${ss}</g>\n` : '') +
+    `<g id="masshtab"><text x="2" y="${SHEET_H - 2}" font-family="${DFONT}" font-size="3.5" fill="#000000">М 1:${fmtN(drawN)}</text></g>\n</svg>\n`;
+}
+// ---------- снимок PNG: лист целиком, в тройном разрешении экрана, без размеров и выделения ----------
+function shotPNG() {
+  const keep = { t: view.target.clone(), d: view.dist };
+  if (selSet.length) clearSel();
+  fitView();
+  const S = sheetRect(), k = 3, pr = rend.getPixelRatio();
+  rend.setPixelRatio(k); rend.setSize(innerWidth, innerHeight, false); rend.render(scene, cam);
+  const c = document.createElement('canvas'); c.width = Math.round(S.w * k); c.height = Math.round(S.h * k);
+  const g = c.getContext('2d'); g.fillStyle = '#ffffff'; g.fillRect(0, 0, c.width, c.height);
+  g.drawImage(rend.domElement, S.x0 * k, S.y0 * k, S.w * k, S.h * k, 0, 0, c.width, c.height);
+  rend.setPixelRatio(pr); rend.setSize(innerWidth, innerHeight, false);
+  view.target.copy(keep.t); view.dist = keep.d; place();
+  return c.toDataURL('image/png').split(',')[1];
+}
+// ---------- папки отчёта (через локальный сервер) ----------
+// тело — JSON простым текстом: такой запрос браузер шлёт без предварительного опроса сервера
+async function srv(path, body) {
+  const r = await fetch(SRV + path, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || !j.ok) throw new Error(j.error || ('ответ сервера ' + r.status));
+  return j;
+}
+const filesOf = j => !j.files ? [] : Array.isArray(j.files) ? j.files : [j.files];
+async function refreshList() {
+  const el = $('dList'); if (!el || !LOCAL) return;
+  try { drawFiles.d = filesOf(await srv('/draw/list', { dir: DIR_DRAW })); drawFiles.s = filesOf(await srv('/draw/list', { dir: DIR_SHOT })); }
+  catch (e) { el.textContent = L('p_noSrv'); return false; }
+  el.replaceChildren();
+  // раздел: значок, название, сколько файлов; под ним файлы строками со значком
+  const sec = (t, arr, ic) => {
+    const h = document.createElement('div'); h.className = 'dlh'; h.innerHTML = DS(DIC[ic], 15) + '<span></span><em></em>';
+    h.children[1].textContent = t; h.lastChild.textContent = arr.length || L('p_empty'); el.appendChild(h);
+    for (const f of arr) {
+      const r = document.createElement('div'); r.className = 'dlf'; r.innerHTML = DS(DIC[ic], 13) + '<span></span>';
+      r.lastChild.textContent = f.name.replace(/\.\w+$/, ''); r.title = f.name + ' — ' + f.time; el.appendChild(r);
+    }
+  };
+  sec(L('p_draw'), drawFiles.d, 'svg'); sec(L('p_shot'), drawFiles.s, 'png');
+  return true;
+}
+function nextName(arr, title, ext) {
+  let n = 0; for (const f of arr) { const m = /^(\d+)/.exec(f.name); if (m) n = Math.max(n, +m[1]); }
+  return String(n + 1).padStart(2, '0') + ' — ' + ((title || '').trim() || 'вид').replace(/[\\/:*?"<>|]/g, '_') + ext;
+}
+// вход во вкладку: в папках уже что-то есть — удалить (в корзину) и начать с 01 или дописывать следующими номерами
+async function checkFolders() {
+  if (!LOCAL || !(await refreshList())) return;
+  const nd = drawFiles.d.length, ns = drawFiles.s.length;
+  if (!nd && !ns) return;
+  const kinds = a => { const c = {}; for (const f of a) { const e = ((/\.(\w+)$/.exec(f.name) || [])[1] || '?').toLowerCase(); c[e] = (c[e] || 0) + 1; } return Object.entries(c).map(([e, k]) => e + ' ' + k).join(', '); };
+  const msg = 'В папках отчёта для зоны «' + LOCAL.zone + '» уже есть файлы:\n' +
+    (nd ? '   листы — ' + nd + ' (' + kinds(drawFiles.d) + ')\n' : '') + (ns ? '   снимки — ' + ns + ' (' + kinds(drawFiles.s) + ')\n' : '') +
+    '\nУдалить их (в корзину Windows) и начать заново?\nОК — удалить.  Отмена — новые кадры пойдут следующими номерами.';
+  if (!confirm(msg)) return;
+  try { await srv('/draw/clear', { dir: DIR_DRAW }); await srv('/draw/clear', { dir: DIR_SHOT }); toast('старые файлы — в корзине'); }
+  catch (e) { toast('не удалось удалить: ' + e.message); }
+  refreshList();
+}
+async function saveSheet() {
+  if (!LOCAL) { toast('в этой странице нет папки заказа — перевыгрузите проект из Базиса'); return; }
+  if (view.persp) setPersp(false);
+  let svg; try { svg = buildSVG(); } catch (e) { console.error(e); toast('лист не собрался: ' + e.message); return; }
+  const name = nextName(drawFiles.d, frameName, '.svg');
+  try { await srv('/draw/save', { dir: DIR_DRAW, name, svg }); toast('лист сохранён: ' + name); }
+  catch (e) { toast('не сохранилось: ' + e.message); return; }
+  refreshList();
+}
+async function saveShot() {
+  if (!LOCAL) { toast('в этой странице нет папки заказа — перевыгрузите проект из Базиса'); return; }
+  const b64 = shotPNG(), name = nextName(drawFiles.s, frameName, '.png');
+  try { await srv('/draw/save', { dir: DIR_SHOT, name, b64 }); toast('снимок сохранён: ' + name); }
+  catch (e) { toast('не сохранилось: ' + e.message); return; }
+  refreshList();
+}
+
+// ---------------- раскладка экрана ----------------
+// Значки — всегда видны, строкой внизу посередине (29.09: прячущаяся строка с язычком ☰ убрана; вверху
+// пробовали — Алексей вернул вниз). Справа вверху — кубик. Структура слева — от верха до строки значков.
+function layout() {
+  const b = $('bar'), t = $('tree'), land = isLand(), s = safe(), cw = $('vcube').offsetWidth;
+  document.documentElement.classList.toggle('land', land);
+  b.style.bottom = (8 + s.b) + 'px';
+  b.style.maxWidth = (innerWidth - 16 - s.l - s.r) + 'px';
+  $('st').style.bottom = (innerHeight - barTop() + 8) + 'px';   // подсказка — над значками
+  // креслення: структура — от ленты до строки-подсказки вплотную, карточка — под строкой значков левее панели листов
+  t.style.top = (drawOn ? ribBottom() : 6 + s.t) + 'px';
+  t.style.bottom = (innerHeight - barTop() + (drawOn ? 0 : 6)) + 'px';
+  const c = $('card'); c.style.top = (drawOn ? ribBottom() + 60 : 10 + s.t) + 'px';
+  if (!TOUCH) c.style.right = drawOn ? ($('dpanel').offsetWidth + 16) + 'px' : '';
+  if (drawOn) { $('dpanel').style.top = ribBottom() + 'px'; placeStrip(); }
+  if (TOUCH) {
+    c.style.left = (10 + s.l) + 'px'; c.style.right = (16 + s.r + cw) + 'px';
+    let tw = 0; try { tw = +localStorage.getItem('viewerTreeW' + (land ? 'L' : 'P')) || 0; } catch (e) {}
+    t.style.width = Math.round((tw || (land ? 0.4 : 0.62)) * innerWidth) + 'px';
+  }
+  placeTools();
+  placeTab();
+  place();
+}
+// Значки включённого на экране (справа вверху): включил инструмент кнопкой — появился значок, нажал на значок —
+// выключил, в строку кнопок лезть не надо (замечание 27.09).
+function syncTools() {
+  const box = $('tools'); box.replaceChildren();
+  const chip = (icon, title, on, cls) => {
+    const b = document.createElement('button'); b.innerHTML = icon; b.title = title; if (cls) b.className = cls;
+    b.onclick = e => { e.stopPropagation(); on(); syncTools(); };
+    box.appendChild(b);
+  };
+  if (ruler) {
+    chip(ICON.ruler, 'вимкнути рулетку', stopRuler);
+    // способ рулетки: лёгкие размеры (для заказчика, по умолчанию), грани, рёбра, точки
+    chip(ICON.easy, 'легкі розміри: комірка, дверцята, шухляда', () => setRMode('easy'), 'mini' + (rmode === 'easy' ? ' on' : ''));
+    chip(ICON.faces, 'міряти від грані до грані', () => setRMode('face'), 'mini' + (rmode === 'face' ? ' on' : ''));
+    chip(ICON.edges, 'міряти від ребра до ребра', () => setRMode('edge'), 'mini' + (rmode === 'edge' ? ' on' : ''));
+    chip(ICON.points, 'міряти від кута до кута', () => setRMode('point'), 'mini' + (rmode === 'point' ? ' on' : ''));
+    chip(ICON.wall, 'до стін: від площини деталі до лінії підлоги або стіни', () => setRMode('wall'), 'mini' + (rmode === 'wall' ? ' on' : ''));
+    chip(ICON.gab, 'габарит виділеного: ширина, висота, глибина', () => setRMode('gab'), 'mini' + (rmode === 'gab' ? ' on' : ''));
+    if (dims.length) chip(ICON.trash, 'стерти всі розміри', () => { clearDims(); partDims.length = 0; easyDims.length = 0; gabDims.length = 0; }, 'mini');
+  }
+  if ($('bShowAll').style.display !== 'none') chip(ICON.eye, 'показати все приховане', showAll);
+  placeTools();
+  if (drawOn) syncPanel();
+}
+// кубик видов — справа вверху; значки включённого — столбиком под ним
+function placeTools() {
+  const box = $('tools'), c = $('vcube'), s = safe();
+  if (drawOn) {                                             // креслення: кубик — внизу справа рабочего поля, как у чертёжных программ
+    const pw = $('dpanel').offsetWidth + 10, y = barTop() - c.offsetHeight - 10;
+    c.style.top = y + 'px'; c.style.right = pw + 'px';
+    box.style.top = (y - 4 - box.offsetHeight) + 'px'; box.style.right = (pw + (c.offsetWidth - 46) / 2) + 'px';
+    placeSheet(); return;
+  }
+  const pw = 0;
+  c.style.top = (6 + s.t) + 'px'; c.style.right = (6 + s.r + pw) + 'px';
+  box.style.top = (6 + s.t + c.offsetHeight + 4) + 'px';
+  box.style.right = (6 + s.r + pw + (c.offsetWidth - 46) / 2) + 'px';
+  if (drawOn) placeSheet();
+}
+// отступы под вырез камеры и полоску «домой» (у айфона — env(safe-area-inset-*), у остальных нули)
+function safe() {
+  let p = $('safeprobe');
+  if (!p) {
+    p = document.createElement('div'); p.id = 'safeprobe';
+    p.style.cssText = 'position:fixed;visibility:hidden;pointer-events:none;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)';
+    document.body.appendChild(p);
+  }
+  const c = getComputedStyle(p);
+  return { t: parseFloat(c.paddingTop) || 0, r: parseFloat(c.paddingRight) || 0, b: parseFloat(c.paddingBottom) || 0, l: parseFloat(c.paddingLeft) || 0 };
+}
+function wireLayout() {
+  // строка значков меняет высоту (подсказка рулетки, «показать всё») — структура и карточка следуют за ней
+  if (window.ResizeObserver) new ResizeObserver(() => layout()).observe($('bar'));
+}
+
+// ---------------- запуск ----------------
+// айфон при повороте сообщает новый размер экрана с опозданием (модель рисовалась растянутой, замечание 27.09) —
+// размер сверяем каждый кадр и подстраиваемся, как только он поменялся
+let lastW = innerWidth, lastH = innerHeight;
+function loop() {
+  requestAnimationFrame(loop);
+  if (innerWidth !== lastW || innerHeight !== lastH) {
+    const flip = (innerWidth > innerHeight) !== (lastW > lastH);
+    lastW = innerWidth; lastH = innerHeight;
+    rend.setSize(innerWidth, innerHeight); layout();
+    if (flip && TOUCH) fitVisible();                       // повернули телефон — вписать модель заново
+  }
+  tick();
+  if (!dirty) return;
+  dirty = false;
+  rend.render(scene, cam);
+  if (drawOn) thumbTick();
+}
+(window.__MODEL ? Promise.resolve(window.__MODEL)
+  : fetch('./model.json?v=' + Date.now(), { cache: 'no-store' }).then(r => { if (!r.ok) throw new Error('файл моделі не знайдено (' + r.status + ')'); return r.json(); }))
+  .then(data => {
+    M = data; build(); for (const p of parts) if (p.isF) for (const l of drawEdgesFor(p)) l.visible = true;   // рёбра фурнитуры видны в 3D сразу
+    wire(); wireLayout(); applyVis(); layout(); fitVisible();
+    window.__viewer = { parts, animNode, M, dims, addDim, drawerDims, easyPick, easyCell, tubeDims, openTarget, pick, blockersOf, poseAll, toggleAt, scopeIds, boxOf, isTube, toWorld, clearDims, root, partsUnder, dragDim, THREE, snapAt, pointVisible, picks, nodes, NCNT, REP, rootKids, selectPart, toggleOne, shiftPick, stepSel, tapPick, asmChain, hideSel, showAll, upLevel, downLevel, effVisible, selGab, gabShow, gabDims, setRMode, frameNodeFor, setDraw, buildSVG, sheetRect, autoDims, fitSheet, fitView, setTool, toolClick, toolHover, drawUndo, drawRedo, gabCommit, dragDimTo, get drawN() { return drawN; }, get selDim() { return selDim; }, set selDim(v) { selDim = v; }, get drawOn() { return drawOn; }, get ruler() { return ruler; }, get selSet() { return selSet; }, get selMany() { return selMany; }, get selOne() { return selOne; }, get selNode() { return selNode; }, get cam() { return cam; }, get placing() { return placing; }, get rp() { return rp; } };   // для проверки из консоли
+    $('load').remove(); loop();
+  })
+  .catch(err => { $('load').textContent = 'Не вдалося відкрити модель: ' + err.message; });
