@@ -215,7 +215,27 @@ html.draw body, html.draw.dlines body { background: transparent; color: var(--rb
 #dpanel .pcol { border: 0; background: transparent; color: var(--rb-muted); padding: 3px; border-radius: 4px; line-height: 0; cursor: pointer; }
 #dpanel .pcol:hover { background: var(--rb-hover); }
 #dpanel .pz { padding: 6px 12px; color: var(--rb-muted); font-size: 12px; }
-#dList { flex: 1; overflow: auto; padding: 0 6px 6px; }
+/* дерево листов металла в правой панели */
+#dTree { flex: 1; padding: 0 6px 6px; overflow: auto; }
+#dpanel .mtg { padding: 4px 6px 2px 8px; font-size: 12px; font-weight: 600; color: var(--rb-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#dpanel .mtr { display: flex; align-items: center; gap: 5px; padding: 4px 6px; font-size: 12px; border-radius: 4px; color: var(--rb-text); cursor: pointer; }
+#dpanel .mtr:hover { background: var(--rb-hover); }
+#dpanel .mtr.on { background: var(--rb-on); color: #fff; }
+#dpanel .mtr span { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#dpanel .mtr i { flex: none; font-style: normal; font-size: 11px; line-height: 1; }
+#dpanel .mtr .me { color: #1f6fe0; }
+#dpanel .mtr .mw { color: #fff; background: #d23b2a; border-radius: 8px; width: 14px; height: 14px; text-align: center; line-height: 14px; font-weight: 700; }
+#dpanel .mtr .mo { color: #d23b2a; }
+#dpanel .msec { cursor: pointer; border-radius: 4px; user-select: none; }
+#dpanel .msec:hover { background: var(--rb-hover); }
+#dpanel .msec i { font-style: normal; width: 10px; color: var(--rb-muted); font-size: 10px; }
+#dpanel .mtoff { margin: 4px 6px; padding: 4px 8px; font-size: 11.5px; color: var(--rb-muted); border: 1px dashed var(--rb-line, #c9d2dc); border-radius: 4px; cursor: pointer; }
+#dpanel .mtoff:hover { color: var(--rb-text); background: var(--rb-hover); }
+#mtmenu { position: fixed; z-index: 70; display: none; background: #fff; border: 1px solid #c9d2dc; border-radius: 6px; box-shadow: 0 6px 20px rgba(0,0,0,.2); padding: 4px; }
+#mtmenu button { display: block; width: 240px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left; padding: 6px 10px; border: 0; background: none; font: 13px system-ui, sans-serif; color: #222; border-radius: 4px; cursor: pointer; }
+#mtmenu button:hover { background: #eef3fb; }
+#dpanel .mtr .mh { color: var(--rb-muted); }
+#dpanel .mtr.on .me, #dpanel .mtr.on .mh { color: #fff; }
 #dpanel .dlh { display: flex; align-items: center; gap: 7px; padding: 6px 6px 3px; font-weight: 600; font-size: 12px; }
 #dpanel .dlh em { margin-left: auto; font-style: normal; font-weight: 400; color: var(--rb-muted); }
 #dpanel .dlf { display: flex; align-items: center; gap: 7px; padding: 3px 6px 3px 16px; font-size: 12px; border-radius: 4px; color: var(--rb-text); }
@@ -247,6 +267,7 @@ html.draw body, html.draw.dlines body { background: transparent; color: var(--rb
 #dsvg .bh { fill: transparent; stroke: none; pointer-events: all; cursor: move; }
 #dsvg .bh:hover { stroke: #7aa7e0; stroke-width: 1px; stroke-dasharray: 4 3; }
 #dsvg .grip.bg { cursor: nwse-resize; stroke: #7aa7e0; }
+#dsvg .grip.bg.ne { cursor: nesw-resize; }
 /* лист металла: виды-блоки — рамка всегда бледная, выделенный — синий; неживой вид ловится всей площадью, живой — краем */
 #dsvg .vfr { fill: none; stroke: #c9d7ea; stroke-width: 1px; stroke-dasharray: 4 3; pointer-events: none; }
 #dsvg .vfr.on { stroke: #1f6fe0; stroke-width: 1.5px; stroke-dasharray: none; }
@@ -255,6 +276,7 @@ html.draw body, html.draw.dlines body { background: transparent; color: var(--rb
 #dsvg .vb { fill: none; stroke: transparent; stroke-width: 10px; pointer-events: stroke; cursor: move; }
 #dsvg .vb:hover { stroke: rgba(122,167,224,.35); }
 #dsvg .vpre { fill: none; stroke: #1f6fe0; stroke-width: 1px; stroke-dasharray: 5 3; pointer-events: none; }
+#dsvg .vpre2 { fill: rgba(31,111,224,.05); stroke: #9db7d9; stroke-width: 1px; stroke-dasharray: 2 4; pointer-events: none; }
 #dsvg .vtip { font: 600 13px system-ui, sans-serif; fill: #1f6fe0; pointer-events: none; }
 /* тема 60: что поймал прицел размера — линия целиком / угол; крестик «убрать вид»; линии связи видов */
 #dsvg .snapl { fill: none; stroke: #ff7a00; stroke-width: 3px; stroke-opacity: .85; stroke-linecap: round; pointer-events: none; }
@@ -267,6 +289,15 @@ html.draw body, html.draw.dlines body { background: transparent; color: var(--rb
 #dsvg .nh { fill: transparent; stroke: none; pointer-events: all; cursor: move; }
 #dsvg .nh:hover { fill: rgba(122,167,224,.10); }
 #dsvg .nh.on { fill: rgba(31,111,224,.10); stroke: #1f6fe0; stroke-width: 1px; stroke-dasharray: 3 2; }
+/* блок связанных видов: рамка всего блока, ярлык — тянуть целиком, уголок — масштаб (ТЗ чертежей металла v3, п. 13) */
+#dsvg .vgf { fill: none; stroke: #9db7d9; stroke-width: 1px; stroke-dasharray: 8 4; pointer-events: none; }
+#dsvg .vgf.on { stroke: #1f6fe0; stroke-width: 2px; stroke-dasharray: none; }
+#dsvg .vgb { fill: none; stroke: transparent; stroke-width: 9px; pointer-events: stroke; cursor: move; }
+#dsvg .vgb:hover { stroke: rgba(31,111,224,.25); }
+#dsvg .vgt rect { fill: #e8f0fb; stroke: #9db7d9; stroke-width: 1px; cursor: move; pointer-events: all; }
+#dsvg .vgt text { font: 600 11px system-ui, sans-serif; fill: #2a5ca8; cursor: move; pointer-events: all; }
+#dsvg .vgt.on rect { fill: #1f6fe0; stroke: #1f6fe0; }
+#dsvg .vgt.on text { fill: #fff; }
 #dsvg .vlink { fill: none; stroke: #7aa7e0; stroke-width: 1px; stroke-dasharray: 2 4; stroke-opacity: .7; pointer-events: none; }
 #dctx button.on { background: var(--rb-on); color: #fff; }
 #dsvg .grip { fill: #fff; stroke: #e0301e; stroke-width: 1.5px; pointer-events: all; cursor: move; }
@@ -361,3 +392,21 @@ html.draw body, html.draw.dlines body { background: transparent; color: var(--rb
 .night #tree .body .tr { color: #e8eaee; text-shadow: none; }
 .night #tree .body .tr * { color: inherit; }
 .night #tree .head { background: rgba(38,41,48,.9); border-bottom-color: #3a3e47; }
+/* окно «Изменить размер» */
+#ddlg { position: fixed; left: 50%; top: 22%; transform: translateX(-50%); z-index: 80; width: 430px; background: #fff; color: #222; border: 1px solid #c9d2dc; border-radius: 10px; box-shadow: 0 10px 34px rgba(0,0,0,.28); padding: 14px 16px; font: 13px system-ui, sans-serif; display: grid; grid-template-columns: 118px 1fr; gap: 7px 10px; align-items: center; }
+#ddlg h4 { grid-column: 1 / 3; margin: 0 0 4px; font-size: 15px; }
+#ddlg label { color: #556; }
+#ddlg .r { display: flex; gap: 6px; align-items: center; }
+#ddlg input:not([type=checkbox]), #ddlg select { flex: 1; min-width: 0; padding: 5px 7px; border: 1px solid #c9d2dc; border-radius: 5px; font: inherit; }
+#ddlg input.s { flex: 0 0 74px; }
+#ddlg .pb button, #ddlg .r > button { padding: 4px 8px; border: 1px solid #c9d2dc; background: #f4f7fb; border-radius: 5px; cursor: pointer; font: inherit; }
+#ddlg .pb { display: flex; gap: 3px; }
+#ddlg .c { display: flex; gap: 6px; align-items: center; color: #222; }
+#ddlg .b { grid-column: 1 / 3; display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
+#ddlg .b button { padding: 6px 16px; border: 1px solid #c9d2dc; background: #f4f7fb; border-radius: 6px; cursor: pointer; font: inherit; }
+#ddlg .b .ok { background: #1f6fe0; border-color: #1f6fe0; color: #fff; }
+/* палитра символов у поля текста размера / выноски */
+#dsyms { position: fixed; z-index: 90; display: none; gap: 2px; padding: 4px; background: #fff; border: 1px solid #c9d2dc; border-radius: 7px; box-shadow: 0 6px 18px rgba(0,0,0,.2); }
+#dsyms button { width: 24px; height: 24px; border: 1px solid transparent; background: none; border-radius: 4px; cursor: pointer; font: 15px system-ui, sans-serif; color: #222; padding: 0; }
+#dsyms button:hover { background: #eef3fb; border-color: #c9d2dc; }
+#dsyms button.sep { margin-right: 7px; }
